@@ -41,6 +41,10 @@ def add_sweep_info(nusc, sample_infos):
     for curr_id in tqdm.tqdm(range(len(sample_infos['infos']))):
         sample = nusc.get('sample', sample_infos['infos'][curr_id]['token'])
 
+        # add scene name for occupancy
+        scene = nusc.get('scene', sample['scene_token'])
+        sample_infos['infos'][curr_id]['scene_name'] = scene['name']
+
         cam_types = [
             'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT',
             'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_FRONT_LEFT'

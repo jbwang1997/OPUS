@@ -4,6 +4,11 @@ from .sparsebev import SparseBEV
 from .sparsebev_head import SparseBEVHead
 from .sparsebev_transformer import SparseBEVTransformer
 
+from .pointocc import PointOcc
+from .pointocc_head import PointOccHead
+from .pointocc_transformer import PointOccTransformer
+
 __all__ = [
-    'SparseBEV', 'SparseBEVHead', 'SparseBEVTransformer'
+    'SparseBEV', 'SparseBEVHead', 'SparseBEVTransformer', 'PointOccHead',
+    'PointOcc', 'PointOccTransformer'
 ]

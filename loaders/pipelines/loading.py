@@ -1,6 +1,7 @@
 import os
 import mmcv
 import numpy as np
+import os.path as osp
 from mmdet.datasets.builder import PIPELINES
 from numpy.linalg import inv
 from mmcv.runner import get_dist_info
@@ -30,6 +31,40 @@ def compose_lidar2img(ego2global_translation_curr,
     lidar2img = (viewpad @ lidar2cam_rt.T).astype(np.float32)
 
     return lidar2img
+
+
+@PIPELINES.register_module()
+class LoadOccFromFile:
+
+    def __init__(self, occ_root, ignore_class_names=[]):
+        self.occ_root = occ_root
+        self.ignore_class_names = ignore_class_names
+        self.occ_class_names = [
+            'others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+            'driveable_surface', 'other_flat', 'sidewalk',
+            'terrain', 'manmade', 'vegetation', 'free'
+        ]
+
+    def __call__(self, results):
+        scene_name, sample_idx = results['scene_name'], results['sample_idx']
+        occ_file = osp.join(self.occ_root, scene_name, sample_idx, 'labels.npz')
+        # load lidar and camera visible label
+        occ_labels = np.load(occ_file)
+        mask_lidar = occ_labels['mask_lidar'].astype(np.bool_)  # [200, 200, 16]
+        mask_camera = occ_labels['mask_camera'].astype(np.bool_)  # [200, 200, 16]
+        results['mask_lidar'] = mask_lidar
+        results['mask_camera'] = mask_camera
+
+        semantics = occ_labels['semantics']  # [200, 200, 16]
+        for class_id in range(len(self.occ_class_names) - 1):
+            mask = semantics == class_id
+            if mask.sum() == 0:
+                continue
+            if self.occ_class_names[class_id] in self.ignore_class_names:
+                semantics[mask] = self.num_classes - 1
+        results['voxel_semantics'] = semantics
+        return results
 
 
 @PIPELINES.register_module()
@@ -63,6 +98,8 @@ class LoadMultiViewImageFromMultiSweeps(object):
                     results['img_timestamp'].append(results['img_timestamp'][j])
                     results['filename'].append(results['filename'][j])
                     results['lidar2img'].append(np.copy(results['lidar2img'][j]))
+                    if 'ego2lidar' in results:
+                        results['ego2lidar'].append(results['ego2lidar'][0])
         else:
             if self.test_mode:
                 interval = self.test_interval
@@ -97,13 +134,15 @@ class LoadMultiViewImageFromMultiSweeps(object):
                         sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
+                    if 'ego2lidar' in results:
+                        results['ego2lidar'].append(results['ego2lidar'][0])
 
         return results
 
     def load_online(self, results):
         # only used when measuring FPS
         assert self.test_mode
-        assert self.test_interval == 6
+        assert self.test_interval % 6 == 0
 
         cam_types = [
             'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
@@ -116,6 +155,8 @@ class LoadMultiViewImageFromMultiSweeps(object):
                     results['img_timestamp'].append(results['img_timestamp'][j])
                     results['filename'].append(results['filename'][j])
                     results['lidar2img'].append(np.copy(results['lidar2img'][j]))
+                    if 'ego2lidar' in results:
+                        results['ego2lidar'].append(results['ego2lidar'][0])
         else:
             interval = self.test_interval
             choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
@@ -140,6 +181,8 @@ class LoadMultiViewImageFromMultiSweeps(object):
                         sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
+                    if 'ego2lidar' in results:
+                        results['ego2lidar'].append(results['ego2lidar'][0])
 
         return results
 
