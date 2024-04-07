@@ -2,6 +2,8 @@ import os
 import mmcv
 import numpy as np
 import torch
+import pickle
+import os.path as osp
 from tqdm import tqdm
 from mmdet.datasets import DATASETS
 from mmdet3d.datasets import NuScenesDataset
@@ -9,8 +11,7 @@ from nuscenes.eval.common.utils import Quaternion
 from nuscenes.utils.geometry_utils import transform_matrix
 from torch.utils.data import DataLoader
 from models.utils import sparse2dense
-from .ray_metrics import main as calc_rayiou
-from .ego_pose_dataset import EgoPoseDataset
+from .old_metrics import Metric_mIoU
 
 
 @DATASETS.register_module()
@@ -18,7 +19,7 @@ class NuScenesOccDataset(NuScenesDataset):
     def __init__(self, *args, **kwargs):
         super().__init__(filter_empty_gt=False, *args, **kwargs)
         self.data_infos = self.load_annotations(self.ann_file)
-
+    
     def collect_sweeps(self, index, into_past=150, into_future=0):
         all_sweeps_prev = []
         curr_index = index
@@ -109,39 +110,32 @@ class NuScenesOccDataset(NuScenesDataset):
         lidar_origins = []
 
         print('\nStarting Evaluation...')
+        metric = Metric_mIoU(use_image_mask=True)
 
-        data_loader = DataLoader(
-            EgoPoseDataset(self.data_infos),
-            batch_size=1,
-            shuffle=False,
-            num_workers=8
-        )
-        
-        sample_tokens = [info['token'] for info in self.data_infos]
+        for i, result_dict in enumerate(occ_results):
+            info = self.get_data_info(i)
+            token = info['sample_idx']
+            scene_name = info['scene_name']
+            occ_root = 'data/nuscenes/gts/'
+            occ_file = osp.join(occ_root, scene_name, token, 'labels.npz')
+            occ_infos = np.load(occ_file)
 
-        for i, batch in enumerate(data_loader):
-            token = batch[0][0]
-            output_origin = batch[1]
+            occ_labels = occ_infos['semantics']
+            mask_lidar = occ_infos['mask_lidar'].astype(np.bool_)
+            mask_camera = occ_infos['mask_camera'].astype(np.bool_)
+
+            occ_pred, _ = sparse2dense(
+                result_dict['occ_loc'],
+                result_dict['sem_pred'],
+                dense_shape=occ_labels.shape,
+                empty_value=17)
             
-            data_id = sample_tokens.index(token)
-            info = self.data_infos[data_id]
-
-            occ_gt = np.load(info['occ_path'], allow_pickle=True)
-            gt_semantics = occ_gt['semantics']
-
-            occ_pred = occ_results[data_id]
-            sem_pred = torch.from_numpy(occ_pred['sem_pred'])  # [B, N]
-            occ_loc = torch.from_numpy(occ_pred['occ_loc'].astype(np.int64))  # [B, N, 3]
+            pickle.dump(occ_pred, open('occ_pred.pkl', 'wb'))
+            pickle.dump(occ_labels, open('occ_labels.pkl', 'wb'))
             
-            occ_size = list(gt_semantics.shape)
-            dense_sem_pred, _ = sparse2dense(occ_loc, sem_pred, dense_shape=occ_size, empty_value=17)
-            dense_sem_pred = dense_sem_pred.squeeze(0).numpy()
-
-            lidar_origins.append(output_origin)
-            occ_gts.append(gt_semantics)
-            occ_preds.append(dense_sem_pred)
+            metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
         
-        return calc_rayiou(occ_preds, occ_gts, lidar_origins)
+        return metric.count_miou()
 
     def format_results(self, occ_results,submission_prefix,**kwargs):
         if submission_prefix is not None:

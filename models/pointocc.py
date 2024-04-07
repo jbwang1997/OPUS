@@ -232,14 +232,7 @@ class PointOcc(MVXTwoStageDetector):
 
     def simple_test_pts(self, x, img_metas, rescale=False):
         outs = self.pts_bbox_head(x, img_metas)
-        bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas[0], rescale=rescale)
-
-        bbox_results = [
-            bbox3d2result(bboxes, scores, labels)
-            for bboxes, scores, labels in bbox_list
-        ]
-
-        return bbox_results
+        return self.pts_bbox_head.get_occ(outs, img_metas[0], rescale=rescale)
     
     def simple_test(self, img_metas, img=None, rescale=False):
         world_size = get_dist_info()[1]
@@ -250,13 +243,7 @@ class PointOcc(MVXTwoStageDetector):
 
     def simple_test_offline(self, img_metas, img=None, rescale=False):
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
-
-        bbox_list = [dict() for _ in range(len(img_metas))]
-        bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
-        for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
-            result_dict['pts_bbox'] = pts_bbox
-
-        return bbox_list
+        return self.simple_test_pts(img_feats, img_metas, rescale=rescale)
 
     def simple_test_online(self, img_metas, img=None, rescale=False):
         self.fp16_enabled = False
@@ -318,10 +305,5 @@ class PointOcc(MVXTwoStageDetector):
         img_metas = img_metas_reorganized
         img_feats = cast_tensor_type(img_feats, torch.half, torch.float32)
 
-        # run detector
-        bbox_list = [dict() for _ in range(1)]
-        bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
-        for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
-            result_dict['pts_bbox'] = pts_bbox
-
-        return bbox_list
+        # run occupancy predictor
+        return self.simple_test_pts(img_feats, img_metas, rescale=rescale)

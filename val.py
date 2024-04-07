@@ -18,33 +18,34 @@ from models.utils import VERSION
 
 def evaluate(dataset, results, epoch):
     metrics = dataset.evaluate(results, jsonfile_prefix='submission')
+    return metrics
 
-    mAP = metrics['pts_bbox_NuScenes/mAP']
-    mATE = metrics['pts_bbox_NuScenes/mATE']
-    mASE = metrics['pts_bbox_NuScenes/mASE']
-    mAOE = metrics['pts_bbox_NuScenes/mAOE']
-    mAVE = metrics['pts_bbox_NuScenes/mAVE']
-    mAAE = metrics['pts_bbox_NuScenes/mAAE']
-    NDS = metrics['pts_bbox_NuScenes/NDS']
+    # mAP = metrics['pts_bbox_NuScenes/mAP']
+    # mATE = metrics['pts_bbox_NuScenes/mATE']
+    # mASE = metrics['pts_bbox_NuScenes/mASE']
+    # mAOE = metrics['pts_bbox_NuScenes/mAOE']
+    # mAVE = metrics['pts_bbox_NuScenes/mAVE']
+    # mAAE = metrics['pts_bbox_NuScenes/mAAE']
+    # NDS = metrics['pts_bbox_NuScenes/NDS']
 
-    logging.info('--- Evaluation Results (Epoch %d) ---' % epoch)
-    logging.info('mAP: %.4f' % metrics['pts_bbox_NuScenes/mAP'])
-    logging.info('mATE: %.4f' % metrics['pts_bbox_NuScenes/mATE'])
-    logging.info('mASE: %.4f' % metrics['pts_bbox_NuScenes/mASE'])
-    logging.info('mAOE: %.4f' % metrics['pts_bbox_NuScenes/mAOE'])
-    logging.info('mAVE: %.4f' % metrics['pts_bbox_NuScenes/mAVE'])
-    logging.info('mAAE: %.4f' % metrics['pts_bbox_NuScenes/mAAE'])
-    logging.info('NDS: %.4f' % metrics['pts_bbox_NuScenes/NDS'])
+    # logging.info('--- Evaluation Results (Epoch %d) ---' % epoch)
+    # logging.info('mAP: %.4f' % metrics['pts_bbox_NuScenes/mAP'])
+    # logging.info('mATE: %.4f' % metrics['pts_bbox_NuScenes/mATE'])
+    # logging.info('mASE: %.4f' % metrics['pts_bbox_NuScenes/mASE'])
+    # logging.info('mAOE: %.4f' % metrics['pts_bbox_NuScenes/mAOE'])
+    # logging.info('mAVE: %.4f' % metrics['pts_bbox_NuScenes/mAVE'])
+    # logging.info('mAAE: %.4f' % metrics['pts_bbox_NuScenes/mAAE'])
+    # logging.info('NDS: %.4f' % metrics['pts_bbox_NuScenes/NDS'])
 
-    return {
-        'mAP': mAP,
-        'mATE': mATE,
-        'mASE': mASE,
-        'mAOE': mAOE,
-        'mAVE': mAVE,
-        'mAAE': mAAE,
-        'NDS': NDS,
-    }
+    # return {
+    #     'mAP': mAP,
+    #     'mATE': mATE,
+    #     'mASE': mASE,
+    #     'mAOE': mAOE,
+    #     'mAVE': mAVE,
+    #     'mAAE': mAAE,
+    #     'NDS': NDS,
+    # }
 
 
 def main():

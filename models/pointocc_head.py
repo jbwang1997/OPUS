@@ -126,11 +126,14 @@ class PointOccHead(BaseModule):
         gt_paired_pts = torch.cat(gt_paired_pts)
         pred_points = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
+        gt_avg_factor = reduce_mean(gt_points.new_tensor(gt_points.shape[0]))
+        pred_avg_factor = reduce_mean(gt_points.new_tensor(pred_points.shape[0]))
+
         loss_pts = pred_points.new_tensor(0)
         loss_pts += self.loss_pts(
-            gt_points, gt_paired_pts, avg_factor=gt_points.shape[0])
+            gt_points, gt_paired_pts, avg_factor=gt_avg_factor)
         loss_pts += self.loss_pts(
-            pred_points, pred_paired_pts, avg_factor=pred_points.shape[0])
+            pred_points, pred_paired_pts, avg_factor=pred_avg_factor)
 
         return loss_cls, loss_pts
     
@@ -182,6 +185,38 @@ class PointOccHead(BaseModule):
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_pts_i
             num_dec_layer += 1
         return loss_dict
+    
+    def get_occ(self, pred_dicts, img_metas, rescale=False):
+        all_cls_scores = pred_dicts['all_cls_scores']
+        all_refine_pts = pred_dicts['all_refine_pts']
+        cls_scores = all_cls_scores[-1].sigmoid()
+        refine_pts = all_refine_pts[-1]
+
+        batch_size = refine_pts.shape[0]
+        pc_range = refine_pts.new_tensor(self.pc_range)
+        voxel_size = refine_pts.new_tensor(self.voxel_size)
+        result_list = []
+        for i in range(batch_size):
+            refine_pts, cls_scores = refine_pts[i], cls_scores[i]
+            scores, labels = cls_scores.max(dim=1)
+            if self.test_cfg.get('score_thr', 0) != 0:
+                score_thr = self.test_cfg.get('score_thr', 0.1)
+                refine_pts = refine_pts[scores > score_thr]
+                labels = labels[scores > score_thr]
+            
+            P, R = refine_pts.shape[:2]
+            refine_pts = decode_points(refine_pts, self.pc_range)
+            refine_pts = refine_pts.flatten(0, 1)
+            occ_index = (refine_pts - pc_range[:3]) / voxel_size
+            occ_index = occ_index.long()
+            labels = labels[:, None].repeat(1, R)
+            labels = labels.flatten(0, 1)
+
+            result_list.append(dict(
+                sem_pred=labels.detach().cpu().numpy(),
+                occ_loc=occ_index.detach().cpu().numpy()))
+
+        return result_list
     
     def get_sparse_voxels(self, voxel_semantics):
         B, W, H, Z = voxel_semantics.shape

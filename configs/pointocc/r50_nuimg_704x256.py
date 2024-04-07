@@ -92,18 +92,18 @@ model = dict(
             alpha=0.25,
             loss_weight=2.0),
         loss_pts=dict(type='L1Loss', loss_weight=10)),
-    train_cfg=dict(pts=dict(
-        grid_size=[512, 512, 1],
-        voxel_size=voxel_size,
-        point_cloud_range=point_cloud_range,
-        out_size_factor=4,
-        assigner=dict(
-            type='HungarianAssigner3D',
-            cls_cost=dict(type='FocalLossCost', weight=2.0),
-            reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
-            iou_cost=dict(type='IoUCost', weight=0.0),
+    train_cfg=dict(
+        pts=dict(
+            grid_size=[512, 512, 1],
+            voxel_size=voxel_size,
+            point_cloud_range=point_cloud_range,
+            out_size_factor=4)
+        ),
+    test_cfg=dict(
+        pts=dict(
+            score_thr=0.1
         )
-    ))
+    )
 )
 
 ida_aug_conf = {
@@ -141,7 +141,7 @@ test_pipeline = [
             dict(type='DefaultFormatBundle3D', class_names=object_names, with_label=False),
             dict(type='Collect3D', keys=['img'], meta_keys=(
                 'filename', 'box_type_3d', 'ori_shape', 'img_shape', 'pad_shape',
-                'lidar2img', 'img_timestamp'))
+                'lidar2img', 'img_timestamp', 'ego2lidar'))
         ])
 ]
 
@@ -202,7 +202,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 12
-batch_size = 16
+batch_size = 4
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
