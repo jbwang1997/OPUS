@@ -31,11 +31,10 @@ voxel_size = [0.4, 0.4, 0.4]
 # arch config
 embed_dims = 256
 num_layers = 6
-num_query = 6000
+num_query = 4000
 num_frames = 8
 num_levels = 4
-num_points = 4
-num_refines = 32
+num_points = 16
 
 img_backbone = dict(
     type='ResNet',
@@ -82,7 +81,6 @@ model = dict(
             num_layers=num_layers,
             num_levels=num_levels,
             num_classes=len(occ_names),
-            num_refines=num_refines,
             pc_range=point_cloud_range,
             voxel_size=voxel_size),
         loss_cls=dict(
@@ -91,7 +89,7 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=2.0),
-        loss_pts=dict(type='L1Loss', loss_weight=10)),
+        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5)),
     train_cfg=dict(
         pts=dict(
             grid_size=[512, 512, 1],
@@ -179,7 +177,7 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=4e-4,
+    lr=2e-4,
     paramwise_cfg=dict(custom_keys={
         'img_backbone': dict(lr_mult=0.1),
         'sampling_offset': dict(lr_mult=0.1),
@@ -202,7 +200,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 12
-batch_size = 4
+batch_size = 1
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
@@ -218,7 +216,7 @@ checkpoint_config = dict(interval=1, max_keep_ckpts=1)
 log_config = dict(
     interval=1,
     hooks=[
-        dict(type='MyTextLoggerHook', interval=1, reset_flag=True),
+        dict(type='TextLoggerHook', interval=1, reset_flag=True),
         dict(type='MyTensorboardLoggerHook', interval=500, reset_flag=True)
     ]
 )

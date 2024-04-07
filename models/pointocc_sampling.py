@@ -5,19 +5,15 @@ from .utils import rotation_3d_in_axis, DUMP
 from .csrc.wrapper import msmv_sampling, msmv_sampling_pytorch
 
 
-def make_sample_points(query_points, offset, pc_range, voxel_size):
+def make_sample_points(query_points, offset, pc_range):
     '''
-    query_points: [B, Q, 6] (x, y, z, sx, sy, sz)
-    offset: [B, Q, num_points, 4], normalized by stride
+    query_points: [B, Q, P, 3] (x, y, z)
+    offset: [B, Q, G, P, 3]
     '''
-    xyz = decode_points(query_points[..., :3], pc_range)  # [B, Q, 3]
-    voxel_size = xyz.new_tensor(voxel_size)
-    wlh = query_points[..., 3:].exp() * voxel_size
-
-    delta_xyz = wlh[:, :, None, :] * offset  # [B, Q, P, 3]
-    sample_xyz = xyz[:, :, None, :] + delta_xyz  # [B, Q, P, 3]
-
-    return sample_xyz  # [B, Q, P, 3]
+    xyz = decode_points(query_points, pc_range)  # [B, Q, 3]
+    xyz = xyz.unsqueeze(2)
+    sample_xyz = xyz + offset  # [B, Q, G, P, 3]
+    return sample_xyz
 
 
 def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, image_w, eps=1e-5):

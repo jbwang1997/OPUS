@@ -48,22 +48,22 @@ class PointOccHead(BaseModule):
         self.loss_pts = build_loss(loss_pts)
         self.transformer = build_transformer(transformer)
         self.embed_dims = self.transformer.embed_dims
-        self.num_refines = self.transformer.num_refines
+        self.num_points = self.transformer.num_points
         self._init_layers()
 
     def _init_layers(self):
-        self.init_query_points = nn.Embedding(self.num_query, 6)
-        self.init_query_feat = nn.Embedding(self.num_query, self.embed_dims)
-        nn.init.uniform_(self.init_query_points.weight[:, :3], 0, 1)
-        nn.init.zeros_(self.init_query_points.weight[:, 3:])
+        self.init_query_points = nn.Embedding(self.num_query, 3)
+        nn.init.uniform_(self.init_query_points.weight, 0, 1)
 
     def init_weights(self):
         self.transformer.init_weights()
 
     def forward(self, mlvl_feats, img_metas):
-        B = mlvl_feats[0].shape[0]
-        query_points = self.init_query_points.weight.unsqueeze(0).repeat(B, 1, 1)
-        query_feat = self.init_query_feat.weight.unsqueeze(0).repeat(B, 1, 1)
+        B, P = mlvl_feats[0].shape[0], self.num_points
+        init_points = self.init_query_points.weight[None, :, None, :]
+        query_points = init_points.repeat(B, 1, P, 1)
+        # query_feat = self.init_query_feat.weight[None, :, :].repeat(B, 1, 1)
+        query_feat = query_points.new_zeros((*query_points.shape[:2], self.embed_dims))
         cls_scores, refine_pts = self.transformer(
             query_points,
             query_feat,
@@ -71,28 +71,28 @@ class PointOccHead(BaseModule):
             img_metas=img_metas,
         )
 
-        return dict(init_points=query_points,
+        return dict(init_points=init_points,
                     all_cls_scores=cls_scores,
                     all_refine_pts=refine_pts)
 
     @torch.no_grad()
     def _get_target_single(self, refine_pts, gt_points, gt_labels):
-        P, R = refine_pts.shape[:2]
-        refine_pts = refine_pts.reshape(P * R, 3)
-
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
+
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
         pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
 
         refine_pts_labels = gt_labels[pred_paired_idx]
-        refine_pts_labels = refine_pts_labels.reshape(P, R)
+        refine_pts_gt_pts = gt_points[pred_paired_idx]
+        dist = torch.norm(refine_pts-refine_pts_gt_pts, dim=-1)
 
-        # vote the final cls
-        onehot_labels = F.one_hot(refine_pts_labels, num_classes=self.num_classes)
-        labels = onehot_labels.sum(dim=1).argmax(dim=-1)
+        pos_dist = self.train_cfg.get('pos_dist', [0.2, 0.5])
+        min_pos_dist, max_pos_dist = min(pos_dist), max(pos_dist)
+        dist_thr = (dist.mean() * 0.2).clamp(min_pos_dist, max_pos_dist)
+        refine_pts_labels[dist > dist_thr] = self.num_classes
 
-        return labels, gt_paired_idx, pred_paired_idx
+        return refine_pts_labels, gt_paired_idx, pred_paired_idx
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -104,36 +104,32 @@ class PointOccHead(BaseModule):
                     gt_points_list,
                     gt_labels_list):
         num_imgs = cls_scores.size(0)
+        cls_scores = cls_scores.view(num_imgs, -1, self.num_classes)
+        refine_pts = refine_pts.view(num_imgs, -1, 3)
+        refine_pts = decode_points(refine_pts, self.pc_range)
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
-        gt_points_list = [encode_points(gt_points, self.pc_range)
-                          for gt_points in gt_points_list]
-        (target_labels_list, gt_paired_idx_list, pred_paired_idx_list) = multi_apply(
+
+        (labels_list, gt_paired_idx_list, pred_paired_idx_list) = multi_apply(
             self._get_target_single, refine_pts_list, gt_points_list, gt_labels_list)
         
-        refine_pts_list = [pts.reshape(-1, 3) for pts in refine_pts_list]
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
             gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
             pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
         
         cls_scores = torch.cat(cls_scores_list)
-        target_labels = torch.cat(target_labels_list)
-        loss_cls = self.loss_cls(
-            cls_scores, target_labels, avg_factor=cls_scores.shape[0])
+        labels = torch.cat(labels_list)
+        loss_cls = self.loss_cls(cls_scores, labels, avg_factor=cls_scores.shape[0])
         
-        gt_points = torch.cat(gt_points_list)
+        gt_pts = torch.cat(gt_points_list)
         gt_paired_pts = torch.cat(gt_paired_pts)
-        pred_points = torch.cat(refine_pts_list)
+        pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
-        gt_avg_factor = reduce_mean(gt_points.new_tensor(gt_points.shape[0]))
-        pred_avg_factor = reduce_mean(gt_points.new_tensor(pred_points.shape[0]))
 
-        loss_pts = pred_points.new_tensor(0)
-        loss_pts += self.loss_pts(
-            gt_points, gt_paired_pts, avg_factor=gt_avg_factor)
-        loss_pts += self.loss_pts(
-            pred_points, pred_paired_pts, avg_factor=pred_avg_factor)
+        loss_pts = pred_pts.new_tensor(0)
+        loss_pts += self.loss_pts(gt_pts, gt_paired_pts, avg_factor=gt_pts.shape[0])
+        loss_pts += self.loss_pts(pred_pts, pred_paired_pts, avg_factor=pred_pts.shape[0])
 
         return loss_cls, loss_pts
     
@@ -156,20 +152,8 @@ class PointOccHead(BaseModule):
         loss_dict = dict()
         # loss of init_points
         if init_points is not None:
-            voxel_size = init_points.new_tensor(self.voxel_size)
-            init_pts, init_scale = init_points[..., :3], init_points[..., 3:]
-            init_pts = decode_points(init_pts, self.pc_range)
-            init_scale = init_scale.exp() * voxel_size
             pseudo_scores = init_points.new_zeros(
-                (*init_pts.shape[:-1], self.num_classes))
-
-            pts = torch.randn(self.num_refines, 3, 
-                              dtype=init_points.dtype,
-                              device=init_points.device)
-            init_points = init_pts[..., None, :] + \
-                pts[None, :] * init_scale[..., None, :]
-            init_points = encode_points(init_points, self.pc_range)
-
+                *init_points.shape[:-1], self.num_classes)
             _, init_loss_pts = self.loss_single(
                 pseudo_scores, init_points, gt_points_list, gt_labels_list)
             loss_dict['init_loss_pts'] = init_loss_pts
@@ -182,7 +166,7 @@ class PointOccHead(BaseModule):
         num_dec_layer = 0
         for loss_cls_i, loss_pts_i in zip(losses_cls[:-1], losses_pts[:-1]):
             loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
-            loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_pts_i
+            loss_dict[f'd{num_dec_layer}.loss_pts'] = loss_pts_i
             num_dec_layer += 1
         return loss_dict
     

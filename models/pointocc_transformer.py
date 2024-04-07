@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-from mmcv.runner import BaseModule
-from mmcv.cnn import bias_init_with_prob
+from mmcv.runner import BaseModule, ModuleList
+from mmcv.cnn import bias_init_with_prob, Scale
 from mmcv.cnn.bricks.transformer import MultiheadAttention, FFN
 from mmcv.ops import knn
 from mmdet.models.utils.builder import TRANSFORMER
-from .bbox.utils import decode_bbox, decode_points
+from .bbox.utils import decode_bbox, decode_points, encode_points
 from .utils import inverse_sigmoid, DUMP
 from .pointocc_sampling import sampling_4d, make_sample_points
 from .checkpoint import checkpoint as cp
@@ -24,6 +24,7 @@ class PointOccTransformer(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
+                 reset_query_stage=3,
                  pc_range=[],
                  voxel_size=[],
                  init_cfg=None):
@@ -33,24 +34,24 @@ class PointOccTransformer(BaseModule):
 
         self.embed_dims = embed_dims
         self.pc_range = pc_range
-        self.num_refines = num_refines
+        self.num_points = num_points
 
         self.decoder = PointOccTransformerDecoder(
             embed_dims, num_frames, num_points, num_layers, num_levels,
-            num_classes, num_refines, pc_range=pc_range, voxel_size=voxel_size)
+            num_classes, reset_query_stage, pc_range=pc_range, voxel_size=voxel_size)
 
     @torch.no_grad()
     def init_weights(self):
         self.decoder.init_weights()
 
     def forward(self, query_points, query_feat, mlvl_feats, img_metas):
-        cls_scores, bbox_preds = self.decoder(
+        cls_scores, refine_pts = self.decoder(
             query_points, query_feat, mlvl_feats, img_metas)
 
         cls_scores = torch.nan_to_num(cls_scores)
-        bbox_preds = torch.nan_to_num(bbox_preds)
+        refine_pts = torch.nan_to_num(refine_pts)
 
-        return cls_scores, bbox_preds
+        return cls_scores, refine_pts
 
 
 class PointOccTransformerDecoder(BaseModule):
@@ -61,7 +62,7 @@ class PointOccTransformerDecoder(BaseModule):
                  num_layers=6,
                  num_levels=4,
                  num_classes=10,
-                 num_refines=16,
+                 reset_query_stage=3,
                  pc_range=[],
                  voxel_size=[],
                  init_cfg=None):
@@ -69,16 +70,21 @@ class PointOccTransformerDecoder(BaseModule):
         self.num_layers = num_layers
         self.pc_range = pc_range
         self.voxel_size = voxel_size
+        self.reset_query_stage = reset_query_stage
 
         # params are shared across all decoder layers
-        self.decoder_layer = PointOccTransformerDecoderLayer(
-            embed_dims, num_frames, num_points, num_levels, num_classes, 
-            num_refines=num_refines, pc_range=pc_range, voxel_size=voxel_size
-        )
+        self.decoder_layers = ModuleList()
+        for i in range(num_layers):
+            self.decoder_layers.append(
+                PointOccTransformerDecoderLayer(
+                    embed_dims, num_frames, num_points, num_levels, num_classes, 
+                    layer_idx=i, pc_range=pc_range, voxel_size=voxel_size
+                )
+            )
 
     @torch.no_grad()
     def init_weights(self):
-        self.decoder_layer.init_weights()
+        self.decoder_layers.init_weights()
 
     def forward(self, query_points, query_feat, mlvl_feats, img_metas):
         cls_scores, refine_pts = [], []
@@ -105,15 +111,18 @@ class PointOccTransformerDecoder(BaseModule):
 
             mlvl_feats[lvl] = feat.contiguous()
 
-        for i in range(self.num_layers):
+        for i, decoder_layer in enumerate(self.decoder_layers):
             DUMP.stage_count = i
 
-            query_feat, query_points, cls_score, refine_pred = self.decoder_layer(
-                query_points, query_feat, mlvl_feats, i, img_metas
-            )
+            query_feat, cls_score, refine_pt = decoder_layer(
+                query_points, query_feat, mlvl_feats, img_metas)
+            query_points = refine_pt.clone().detach()
+            # if i < self.reset_query_stage:
+                # the query_points vary fastly in early stage
+                # query_feat = torch.zeros_like(query_feat)
 
             cls_scores.append(cls_score)
-            refine_pts.append(refine_pred)
+            refine_pts.append(refine_pt)
 
         cls_scores = torch.stack(cls_scores)
         refine_pts = torch.stack(refine_pts)
@@ -128,9 +137,9 @@ class PointOccTransformerDecoderLayer(BaseModule):
                  num_points=4,
                  num_levels=4,
                  num_classes=10,
-                 num_refines=16,
                  num_cls_fcs=2,
                  num_reg_fcs=2,
+                 layer_idx=0,
                  pc_range=[],
                  voxel_size=[],
                  init_cfg=None):
@@ -138,9 +147,9 @@ class PointOccTransformerDecoderLayer(BaseModule):
 
         self.embed_dims = embed_dims
         self.num_classes = num_classes
-        self.num_refines = num_refines
         self.pc_range = pc_range
         self.voxel_size = voxel_size
+        self.num_points = num_points
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3, self.embed_dims), 
@@ -169,15 +178,19 @@ class PointOccTransformerDecoderLayer(BaseModule):
             cls_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
             cls_branch.append(nn.LayerNorm(self.embed_dims))
             cls_branch.append(nn.ReLU(inplace=True))
-        cls_branch.append(nn.Linear(self.embed_dims, self.num_classes))
+        cls_branch.append(nn.Linear(
+            self.embed_dims, self.num_classes * self.num_points))
         self.cls_branch = nn.Sequential(*cls_branch)
 
         reg_branch = []
         for _ in range(num_reg_fcs):
             reg_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
             reg_branch.append(nn.ReLU(inplace=True))
-        reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_refines))
+        reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_points))
         self.reg_branch = nn.Sequential(*reg_branch)
+
+        init_scale = max(2**(3 - layer_idx), 1)
+        self.scale = Scale(init_scale)
 
     @torch.no_grad()
     def init_weights(self):
@@ -190,35 +203,32 @@ class PointOccTransformerDecoderLayer(BaseModule):
 
     def refine_points(self, points_proposal, points_delta):
         B, Q = points_delta.shape[:2]
+        points_delta = points_delta.reshape(B, Q, self.num_points, 3)
 
-        xyz = inverse_sigmoid(points_proposal[..., :3])
-        points_delta = points_delta.reshape(B, Q, self.num_refines, 3)
-        xyz_new = torch.sigmoid(points_delta + xyz[..., None, :])
+        points_proposal = decode_points(points_proposal, self.pc_range)
+        points_proposal = points_proposal.unsqueeze(2)
+        new_points = points_proposal + points_delta
+        return encode_points(new_points, self.pc_range)
 
-        with torch.no_grad():
-            decoded_points = decode_points(xyz_new, self.pc_range)
-            voxel_size = xyz_new.new_tensor(self.voxel_size)
-            new_ref_xyz = xyz_new.mean(dim=2)
-            new_ref_scale = (decoded_points.std(dim=2) / voxel_size + 1e-6).log()
-            new_ref = torch.cat([new_ref_xyz, new_ref_scale], dim=-1)
-        
-        return xyz_new, new_ref
-
-    def forward(self, query_points, query_feat, mlvl_feats, layer_idx, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, img_metas):
         """
-        query_points: [B, Q, 6] [cx, cy, cz, sx, sy, sz]
+        query_points: [B, Q, P, 3] [x, y, z]
         """
-        query_pos = self.position_encoder(query_points[..., :3])
+        centers = query_points.mean(dim=2)
+        query_pos = self.position_encoder(centers)
         query_feat = query_feat + query_pos
 
-        query_feat = self.norm1(self.self_attn(query_points, query_feat, layer_idx))
-        sampled_feat = self.sampling(query_points, query_feat, mlvl_feats, img_metas)
+        query_feat = self.norm1(self.self_attn(centers, query_feat))
+        sampled_feat = self.sampling(
+            query_points, query_feat, mlvl_feats, img_metas, self.scale)
         query_feat = self.norm2(self.mixing(sampled_feat, query_feat))
         query_feat = self.norm3(self.ffn(query_feat))
 
-        cls_score = self.cls_branch(query_feat)  # [B, Q, num_classes]
-        reg_offset = self.reg_branch(query_feat)  # [B, Q, code_size]
-        refine_points, query_points = self.refine_points(query_points, reg_offset)
+        B, Q, P = query_points.shape[:3]
+        cls_score = self.cls_branch(query_feat)  # [B, Q, P * num_classes]
+        reg_offset = self.scale(self.reg_branch(query_feat))  # [B, Q, P * 3]
+        cls_score = cls_score.reshape(B, Q, P, self.num_classes)
+        refine_pt = self.refine_points(centers, reg_offset)
 
         if DUMP.enabled:
             pass
@@ -230,24 +240,96 @@ class PointOccTransformerDecoderLayer(BaseModule):
             # torch.save(bbox_pred_dec.cpu(), '{}/bbox_pred_stage{}.pth'.format(DUMP.out_dir, DUMP.stage_count))
             # torch.save(cls_score_sig.cpu(), '{}/cls_score_stage{}.pth'.format(DUMP.out_dir, DUMP.stage_count))
 
-        return query_feat, query_points, cls_score, refine_points
+        return query_feat, cls_score, refine_pt
+
+
+# class PointOccSelfAttention(BaseModule):
+#     """Scale-adaptive Self Attention"""
+#     def __init__(self,
+#                  embed_dims=256,
+#                  num_heads=8,
+#                  split_groups=3,
+#                  dropout=0.1,
+#                  pc_range=[],
+#                  knn=9,
+#                  init_cfg=None):
+#         super().__init__(init_cfg)
+#         self.pc_range = pc_range
+#         self.split_groups = split_groups
+#         self.num_heads = num_heads
+#         self.knn = knn
+
+#         self.attention = MultiheadAttention(embed_dims, num_heads, dropout, batch_first=True)
+#         self.gen_tau = nn.Linear(embed_dims, num_heads)
+
+#     @torch.no_grad()
+#     def init_weights(self):
+#         nn.init.zeros_(self.gen_tau.weight)
+#         nn.init.uniform_(self.gen_tau.bias, 0.0, 2.0)
+
+#     def inner_forward(self, query_points, query_feat, layer_idx):
+#         """
+#         query_points: [B, Q, 3]
+#         query_feat: [B, Q, C]
+#         """
+#         tau = self.gen_tau(query_feat)  # [B, Q, 8]
+
+#         if DUMP.enabled:
+#             torch.save(tau.cpu(), '{}/sasa_tau_stage{}.pth'.format(DUMP.out_dir, DUMP.stage_count))
+
+#         # split groups
+#         B, NQ, C = query_feat.shape
+#         N, Q = self.split_groups, int(NQ / self.split_groups)
+
+#         near_idx = knn(self.knn, query_points).permute(0, 2, 1).flatten(1) # [B, Q * knn]
+#         near_idx = near_idx.unsqueeze(-1).repeat(1, 1, C).long()
+#         near_feat = torch.gather(query_feat, 1, near_idx).reshape(B * N * Q, self.knn, C)
+#         local_query_feat = self.attention(query=near_feat[:, [0], :], key=near_feat)
+
+#         query_feat = query_feat.reshape(B, N, Q, C)
+#         key_feat = torch.roll(query_feat, layer_idx % N, dims=1)
+
+#         # calc attn mask
+#         dist = self.calc_points_dists(query_points, layer_idx)
+#         tau = tau.reshape(B, N, Q, self.num_heads).permute(0, 1, 3, 2) # [B, N, 8, Q]
+#         attn_mask = dist[..., None, :, :] * tau[..., None]
+
+#         query_feat = query_feat.flatten(0, 1)
+#         key_feat = key_feat.flatten(0, 1)
+#         attn_mask = attn_mask.flatten(0, 2)
+
+#         global_query_feat = self.attention(query=query_feat, key=key_feat, attn_mask=attn_mask)
+#         query_feat = local_query_feat.reshape(B, N*Q, C) + global_query_feat.reshape(B, N*Q, C)
+#         return query_feat
+
+#     def forward(self, query_points, query_feat, layer_idx):
+#         if self.training and query_feat.requires_grad:
+#             return cp(self.inner_forward, query_points, query_feat,
+#                       layer_idx, use_reentrant=False)
+#         else:
+#             return self.inner_forward(query_points, query_feat, layer_idx)
+
+#     @torch.no_grad()
+#     def calc_points_dists(self, points, layer_idx):
+#         B, NQ, C = points.shape
+#         N, Q = self.split_groups, int(NQ / self.split_groups)
+
+#         points1 = decode_points(points, self.pc_range).reshape(B, N, Q, C)
+#         points2 = torch.roll(points1, layer_idx % N, dims=1)
+#         dist = torch.norm(points1.unsqueeze(-2) - points2.unsqueeze(-3), dim=-1)
+#         return -dist
 
 
 class PointOccSelfAttention(BaseModule):
     """Scale-adaptive Self Attention"""
-    def __init__(self,
+    def __init__(self, 
                  embed_dims=256,
                  num_heads=8,
-                 split_groups=3,
                  dropout=0.1,
                  pc_range=[],
-                 knn=9,
                  init_cfg=None):
         super().__init__(init_cfg)
         self.pc_range = pc_range
-        self.split_groups = split_groups
-        self.num_heads = num_heads
-        self.knn = knn
 
         self.attention = MultiheadAttention(embed_dims, num_heads, dropout, batch_first=True)
         self.gen_tau = nn.Linear(embed_dims, num_heads)
@@ -257,57 +339,34 @@ class PointOccSelfAttention(BaseModule):
         nn.init.zeros_(self.gen_tau.weight)
         nn.init.uniform_(self.gen_tau.bias, 0.0, 2.0)
 
-    def inner_forward(self, query_points, query_feat, layer_idx):
+    def inner_forward(self, query_points, query_feat):
         """
         query_points: [B, Q, 6]
         query_feat: [B, Q, C]
         """
-        points = query_points[..., :3].detach().contiguous()
+        dist = self.calc_points_dists(query_points)
         tau = self.gen_tau(query_feat)  # [B, Q, 8]
 
         if DUMP.enabled:
             torch.save(tau.cpu(), '{}/sasa_tau_stage{}.pth'.format(DUMP.out_dir, DUMP.stage_count))
 
-        # split groups
-        B, NQ, C = query_feat.shape
-        N, Q = self.split_groups, int(NQ / self.split_groups)
+        tau = tau.permute(0, 2, 1)  # [B, 8, Q]
+        attn_mask = dist[:, None, :, :] * tau[..., None]  # [B, 8, Q, Q]
 
-        near_idx = knn(self.knn, points).permute(0, 2, 1).flatten(1) # [B, Q * knn]
-        near_idx = near_idx.unsqueeze(-1).repeat(1, 1, C).long()
-        near_feat = torch.gather(query_feat, 1, near_idx).reshape(B * N * Q, self.knn, C)
-        local_query_feat = self.attention(query=near_feat[:, [0], :], key=near_feat)
+        attn_mask = attn_mask.flatten(0, 1)  # [Bx8, Q, Q]
+        return self.attention(query_feat, attn_mask=attn_mask)
 
-        query_feat = query_feat.reshape(B, N, Q, C)
-        key_feat = torch.roll(query_feat, layer_idx % N, dims=1)
-
-        # calc attn mask
-        dist = self.calc_points_dists(points, layer_idx)
-        tau = tau.reshape(B, N, Q, self.num_heads).permute(0, 1, 3, 2) # [B, N, 8, Q]
-        attn_mask = dist[..., None, :, :] * tau[..., None]
-
-        query_feat = query_feat.flatten(0, 1)
-        key_feat = key_feat.flatten(0, 1)
-        attn_mask = attn_mask.flatten(0, 2)
-
-        global_query_feat = self.attention(query=query_feat, key=key_feat, attn_mask=attn_mask)
-        query_feat = local_query_feat.reshape(B, N*Q, C) + global_query_feat.reshape(B, N*Q, C)
-        return query_feat
-
-    def forward(self, query_points, query_feat, layer_idx):
+    def forward(self, query_points, query_feat):
         if self.training and query_feat.requires_grad:
             return cp(self.inner_forward, query_points, query_feat,
-                      layer_idx, use_reentrant=False)
+                      use_reentrant=False)
         else:
-            return self.inner_forward(query_points, query_feat, layer_idx)
+            return self.inner_forward(query_points, query_feat)
 
     @torch.no_grad()
-    def calc_points_dists(self, points, layer_idx):
-        B, NQ, C = points.shape
-        N, Q = self.split_groups, int(NQ / self.split_groups)
-
-        points1 = decode_points(points, self.pc_range).reshape(B, N, Q, C)
-        points2 = torch.roll(points1, layer_idx % N, dims=1)
-        dist = torch.norm(points1.unsqueeze(-2) - points2.unsqueeze(-3), dim=-1)
+    def calc_points_dists(self, points):
+        points = decode_points(points, self.pc_range)
+        dist = torch.norm(points.unsqueeze(-2) - points.unsqueeze(-3), dim=-1)
         return -dist
 
 
@@ -339,7 +398,7 @@ class PointOccSampling(BaseModule):
         nn.init.zeros_(self.sampling_offset.weight)
         nn.init.uniform_(bias[:, 0:3], -0.5, 0.5)
 
-    def inner_forward(self, query_points, query_feat, mlvl_feats, img_metas):
+    def inner_forward(self, query_points, query_feat, mlvl_feats, img_metas, scale):
         '''
         query_points: [B, Q, 6]
         query_feat: [B, Q, C]
@@ -348,10 +407,9 @@ class PointOccSampling(BaseModule):
         image_h, image_w, _ = img_metas[0]['img_shape'][0]
 
         # sampling offset of all frames
-        sampling_offset = self.sampling_offset(query_feat)
-        sampling_offset = sampling_offset.view(B, Q, self.num_groups * self.num_points, 3)
-        sampling_points = make_sample_points(
-            query_points, sampling_offset, self.pc_range, self.voxel_size)  # [B, Q, GP, 3]
+        sampling_offset = scale(self.sampling_offset(query_feat))
+        sampling_offset = sampling_offset.view(B, Q, self.num_groups, self.num_points, 3)
+        sampling_points = make_sample_points(query_points, sampling_offset, self.pc_range)  # [B, Q, G, P, 3]
         sampling_points = sampling_points.reshape(B, Q, 1, self.num_groups, self.num_points, 3)
         sampling_points = sampling_points.expand(B, Q, self.num_frames, self.num_groups, self.num_points, 3)
 
@@ -371,12 +429,13 @@ class PointOccSampling(BaseModule):
 
         return sampled_feats
 
-    def forward(self, query_points, query_feat, mlvl_feats, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, img_metas, scale):
         if self.training and query_feat.requires_grad:
             return cp(self.inner_forward, query_points, query_feat, mlvl_feats,
-                      img_metas, use_reentrant=False)
+                      img_metas, scale, use_reentrant=False)
         else:
-            return self.inner_forward(query_points, query_feat, mlvl_feats, img_metas)
+            return self.inner_forward(query_points, query_feat, mlvl_feats, 
+                                      img_metas, scale)
 
 
 class AdaptiveMixing(nn.Module):
