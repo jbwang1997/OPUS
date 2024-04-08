@@ -26,7 +26,6 @@ class PointOccTransformer(BaseModule):
                  num_refines=16,
                  reset_query_stage=3,
                  pc_range=[],
-                 voxel_size=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
                             'behavior, init_cfg is not allowed to be set'
@@ -34,11 +33,11 @@ class PointOccTransformer(BaseModule):
 
         self.embed_dims = embed_dims
         self.pc_range = pc_range
-        self.num_points = num_points
+        self.num_refines = num_refines
 
         self.decoder = PointOccTransformerDecoder(
             embed_dims, num_frames, num_points, num_layers, num_levels,
-            num_classes, reset_query_stage, pc_range=pc_range, voxel_size=voxel_size)
+            num_classes, num_refines, reset_query_stage, pc_range=pc_range)
 
     @torch.no_grad()
     def init_weights(self):
@@ -62,14 +61,13 @@ class PointOccTransformerDecoder(BaseModule):
                  num_layers=6,
                  num_levels=4,
                  num_classes=10,
-                 reset_query_stage=3,
+                 num_refines=16,
+                 reset_query_stage=1,
                  pc_range=[],
-                 voxel_size=[],
                  init_cfg=None):
         super(PointOccTransformerDecoder, self).__init__(init_cfg)
         self.num_layers = num_layers
         self.pc_range = pc_range
-        self.voxel_size = voxel_size
         self.reset_query_stage = reset_query_stage
 
         # params are shared across all decoder layers
@@ -78,8 +76,7 @@ class PointOccTransformerDecoder(BaseModule):
             self.decoder_layers.append(
                 PointOccTransformerDecoderLayer(
                     embed_dims, num_frames, num_points, num_levels, num_classes, 
-                    layer_idx=i, pc_range=pc_range, voxel_size=voxel_size
-                )
+                    num_refines, layer_idx=i, pc_range=pc_range)
             )
 
     @torch.no_grad()
@@ -116,10 +113,10 @@ class PointOccTransformerDecoder(BaseModule):
 
             query_feat, cls_score, refine_pt = decoder_layer(
                 query_points, query_feat, mlvl_feats, img_metas)
-            query_points = refine_pt.clone().detach()
-            # if i < self.reset_query_stage:
+            query_points = refine_pt.detach().mean(dim=-2)
+            if i < self.reset_query_stage:
                 # the query_points vary fastly in early stage
-                # query_feat = torch.zeros_like(query_feat)
+                query_feat = torch.zeros_like(query_feat)
 
             cls_scores.append(cls_score)
             refine_pts.append(refine_pt)
@@ -137,19 +134,19 @@ class PointOccTransformerDecoderLayer(BaseModule):
                  num_points=4,
                  num_levels=4,
                  num_classes=10,
+                 num_refines=16,
                  num_cls_fcs=2,
                  num_reg_fcs=2,
                  layer_idx=0,
                  pc_range=[],
-                 voxel_size=[],
                  init_cfg=None):
         super(PointOccTransformerDecoderLayer, self).__init__(init_cfg)
 
         self.embed_dims = embed_dims
         self.num_classes = num_classes
         self.pc_range = pc_range
-        self.voxel_size = voxel_size
         self.num_points = num_points
+        self.num_refines = num_refines
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3, self.embed_dims), 
@@ -164,7 +161,7 @@ class PointOccTransformerDecoderLayer(BaseModule):
             embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
         self.sampling = PointOccSampling(embed_dims, num_frames=num_frames, num_groups=4,
                                          num_points=num_points, num_levels=num_levels,
-                                         pc_range=pc_range, voxel_size=voxel_size)
+                                         pc_range=pc_range)
         self.mixing = AdaptiveMixing(in_dim=embed_dims, in_points=num_points * num_frames,
                                      n_groups=4, out_points=32)
         self.ffn = FFN(embed_dims, feedforward_channels=512, ffn_drop=0.1)
@@ -179,18 +176,17 @@ class PointOccTransformerDecoderLayer(BaseModule):
             cls_branch.append(nn.LayerNorm(self.embed_dims))
             cls_branch.append(nn.ReLU(inplace=True))
         cls_branch.append(nn.Linear(
-            self.embed_dims, self.num_classes * self.num_points))
+            self.embed_dims, self.num_classes * self.num_refines))
         self.cls_branch = nn.Sequential(*cls_branch)
 
         reg_branch = []
         for _ in range(num_reg_fcs):
             reg_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
             reg_branch.append(nn.ReLU(inplace=True))
-        reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_points))
+        reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_refines))
         self.reg_branch = nn.Sequential(*reg_branch)
 
-        init_scale = max(2**(3 - layer_idx), 1)
-        self.scale = Scale(init_scale)
+        self.scale = Scale(8)
 
     @torch.no_grad()
     def init_weights(self):
@@ -203,7 +199,7 @@ class PointOccTransformerDecoderLayer(BaseModule):
 
     def refine_points(self, points_proposal, points_delta):
         B, Q = points_delta.shape[:2]
-        points_delta = points_delta.reshape(B, Q, self.num_points, 3)
+        points_delta = points_delta.reshape(B, Q, self.num_refines, 3)
 
         points_proposal = decode_points(points_proposal, self.pc_range)
         points_proposal = points_proposal.unsqueeze(2)
@@ -212,23 +208,22 @@ class PointOccTransformerDecoderLayer(BaseModule):
 
     def forward(self, query_points, query_feat, mlvl_feats, img_metas):
         """
-        query_points: [B, Q, P, 3] [x, y, z]
+        query_points: [B, Q, 3] [x, y, z]
         """
-        centers = query_points.mean(dim=2)
-        query_pos = self.position_encoder(centers)
+        query_pos = self.position_encoder(query_points)
         query_feat = query_feat + query_pos
 
-        query_feat = self.norm1(self.self_attn(centers, query_feat))
         sampled_feat = self.sampling(
             query_points, query_feat, mlvl_feats, img_metas, self.scale)
-        query_feat = self.norm2(self.mixing(sampled_feat, query_feat))
+        query_feat = self.norm1(self.mixing(sampled_feat, query_feat))
+        query_feat = self.norm2(self.self_attn(query_points, query_feat))
         query_feat = self.norm3(self.ffn(query_feat))
 
-        B, Q, P = query_points.shape[:3]
+        B, Q = query_points.shape[:2]
         cls_score = self.cls_branch(query_feat)  # [B, Q, P * num_classes]
         reg_offset = self.scale(self.reg_branch(query_feat))  # [B, Q, P * 3]
-        cls_score = cls_score.reshape(B, Q, P, self.num_classes)
-        refine_pt = self.refine_points(centers, reg_offset)
+        cls_score = cls_score.reshape(B, Q, self.num_refines, self.num_classes)
+        refine_pt = self.refine_points(query_points, reg_offset)
 
         if DUMP.enabled:
             pass
@@ -379,7 +374,6 @@ class PointOccSampling(BaseModule):
                  num_points=8,
                  num_levels=4,
                  pc_range=[],
-                 voxel_size=[],
                  init_cfg=None):
         super().__init__(init_cfg)
 
@@ -388,7 +382,6 @@ class PointOccSampling(BaseModule):
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.pc_range = pc_range
-        self.voxel_size = voxel_size
 
         self.sampling_offset = nn.Linear(embed_dims, num_groups * num_points * 3)
         self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels)

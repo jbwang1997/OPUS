@@ -34,7 +34,8 @@ num_layers = 6
 num_query = 4000
 num_frames = 8
 num_levels = 4
-num_points = 16
+num_points = 4
+num_refines = 16
 
 img_backbone = dict(
     type='ResNet',
@@ -81,8 +82,8 @@ model = dict(
             num_layers=num_layers,
             num_levels=num_levels,
             num_classes=len(occ_names),
-            pc_range=point_cloud_range,
-            voxel_size=voxel_size),
+            num_refines=num_refines,
+            pc_range=point_cloud_range),
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -200,7 +201,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 12
-batch_size = 1
+batch_size = 8
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'

@@ -11,7 +11,7 @@ def make_sample_points(query_points, offset, pc_range):
     offset: [B, Q, G, P, 3]
     '''
     xyz = decode_points(query_points, pc_range)  # [B, Q, 3]
-    xyz = xyz.unsqueeze(2)
+    xyz = xyz[..., None, None, :]  # [B, Q, 1, 1, 3]
     sample_xyz = xyz + offset  # [B, Q, G, P, 3]
     return sample_xyz
 

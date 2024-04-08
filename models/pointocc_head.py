@@ -48,7 +48,6 @@ class PointOccHead(BaseModule):
         self.loss_pts = build_loss(loss_pts)
         self.transformer = build_transformer(transformer)
         self.embed_dims = self.transformer.embed_dims
-        self.num_points = self.transformer.num_points
         self._init_layers()
 
     def _init_layers(self):
@@ -59,9 +58,8 @@ class PointOccHead(BaseModule):
         self.transformer.init_weights()
 
     def forward(self, mlvl_feats, img_metas):
-        B, P = mlvl_feats[0].shape[0], self.num_points
-        init_points = self.init_query_points.weight[None, :, None, :]
-        query_points = init_points.repeat(B, 1, P, 1)
+        B = mlvl_feats[0].shape[0]
+        query_points = self.init_query_points.weight[None, ...].repeat(B, 1, 1)
         # query_feat = self.init_query_feat.weight[None, :, :].repeat(B, 1, 1)
         query_feat = query_points.new_zeros((*query_points.shape[:2], self.embed_dims))
         cls_scores, refine_pts = self.transformer(
@@ -71,7 +69,7 @@ class PointOccHead(BaseModule):
             img_metas=img_metas,
         )
 
-        return dict(init_points=init_points,
+        return dict(init_points=query_points.unsqueeze(2),
                     all_cls_scores=cls_scores,
                     all_refine_pts=refine_pts)
 
@@ -182,19 +180,18 @@ class PointOccHead(BaseModule):
         result_list = []
         for i in range(batch_size):
             refine_pts, cls_scores = refine_pts[i], cls_scores[i]
-            scores, labels = cls_scores.max(dim=1)
-            if self.test_cfg.get('score_thr', 0) != 0:
-                score_thr = self.test_cfg.get('score_thr', 0.1)
+            scores, labels = cls_scores.max(dim=-1)
+            if self.test_cfg.get('score_thr', 0.3) != 0:
+                score_thr = self.test_cfg.get('score_thr', 0.3)
                 refine_pts = refine_pts[scores > score_thr]
                 labels = labels[scores > score_thr]
             
-            P, R = refine_pts.shape[:2]
             refine_pts = decode_points(refine_pts, self.pc_range)
-            refine_pts = refine_pts.flatten(0, 1)
+            refine_pts[..., 0] = refine_pts[..., 0].clamp(pc_range[0], pc_range[3] - 1e-3)
+            refine_pts[..., 1] = refine_pts[..., 1].clamp(pc_range[1], pc_range[4] - 1e-3)
+            refine_pts[..., 2] = refine_pts[..., 2].clamp(pc_range[2], pc_range[5] - 1e-3)
             occ_index = (refine_pts - pc_range[:3]) / voxel_size
             occ_index = occ_index.long()
-            labels = labels[:, None].repeat(1, R)
-            labels = labels.flatten(0, 1)
 
             result_list.append(dict(
                 sem_pred=labels.detach().cpu().numpy(),
