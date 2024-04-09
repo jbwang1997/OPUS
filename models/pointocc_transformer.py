@@ -24,7 +24,7 @@ class PointOccTransformer(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
-                 reset_query_stage=3,
+                 scales=[8.0],
                  pc_range=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
@@ -37,7 +37,7 @@ class PointOccTransformer(BaseModule):
 
         self.decoder = PointOccTransformerDecoder(
             embed_dims, num_frames, num_points, num_layers, num_levels,
-            num_classes, num_refines, reset_query_stage, pc_range=pc_range)
+            num_classes, num_refines, scales, pc_range=pc_range)
 
     @torch.no_grad()
     def init_weights(self):
@@ -62,13 +62,15 @@ class PointOccTransformerDecoder(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
-                 reset_query_stage=1,
+                 scales=[8.0],
                  pc_range=[],
                  init_cfg=None):
         super(PointOccTransformerDecoder, self).__init__(init_cfg)
         self.num_layers = num_layers
         self.pc_range = pc_range
-        self.reset_query_stage = reset_query_stage
+
+        if len(scales) == 1:
+            scales = scales * num_layers
 
         # params are shared across all decoder layers
         self.decoder_layers = ModuleList()
@@ -76,7 +78,7 @@ class PointOccTransformerDecoder(BaseModule):
             self.decoder_layers.append(
                 PointOccTransformerDecoderLayer(
                     embed_dims, num_frames, num_points, num_levels, num_classes, 
-                    num_refines, layer_idx=i, pc_range=pc_range)
+                    num_refines, layer_idx=i, scale=scales[i], pc_range=pc_range)
             )
 
     @torch.no_grad()
@@ -114,9 +116,6 @@ class PointOccTransformerDecoder(BaseModule):
             query_feat, cls_score, refine_pt = decoder_layer(
                 query_points, query_feat, mlvl_feats, img_metas)
             query_points = refine_pt.detach().mean(dim=-2)
-            if i < self.reset_query_stage:
-                # the query_points vary fastly in early stage
-                query_feat = torch.zeros_like(query_feat)
 
             cls_scores.append(cls_score)
             refine_pts.append(refine_pt)
@@ -138,6 +137,7 @@ class PointOccTransformerDecoderLayer(BaseModule):
                  num_cls_fcs=2,
                  num_reg_fcs=2,
                  layer_idx=0,
+                 scale=1.0,
                  pc_range=[],
                  init_cfg=None):
         super(PointOccTransformerDecoderLayer, self).__init__(init_cfg)
@@ -186,7 +186,7 @@ class PointOccTransformerDecoderLayer(BaseModule):
         reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_refines))
         self.reg_branch = nn.Sequential(*reg_branch)
 
-        self.scale = Scale(8)
+        self.scale = Scale(scale)
 
     @torch.no_grad()
     def init_weights(self):

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.runner import force_fp32, BaseModule
-from mmcv.ops import knn
+from mmcv.ops import knn, Voxelization
 from mmdet.core import multi_apply, reduce_mean
 from mmdet.models import HEADS
 from mmdet.models.utils import build_transformer
@@ -47,7 +47,14 @@ class PointOccHead(BaseModule):
         self.loss_cls = build_loss(loss_cls)
         self.loss_pts = build_loss(loss_pts)
         self.transformer = build_transformer(transformer)
+        self.num_refines = self.transformer.num_refines
         self.embed_dims = self.transformer.embed_dims
+        self.voxel_generator = Voxelization(
+            voxel_size=self.voxel_size,
+            point_cloud_range=self.pc_range,
+            max_num_points=10, 
+            max_voxels=self.num_query * self.num_refines,
+        )
         self._init_layers()
 
     def _init_layers(self):
@@ -62,6 +69,7 @@ class PointOccHead(BaseModule):
         query_points = self.init_query_points.weight[None, ...].repeat(B, 1, 1)
         # query_feat = self.init_query_feat.weight[None, :, :].repeat(B, 1, 1)
         query_feat = query_points.new_zeros((*query_points.shape[:2], self.embed_dims))
+        #[D B, Q, P, num_classes / 3]
         cls_scores, refine_pts = self.transformer(
             query_points,
             query_feat,
@@ -133,6 +141,7 @@ class PointOccHead(BaseModule):
     
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self, voxel_semantics, preds_dicts):
+        # voxelsemantics [B, X200, Y200, Z16] unocuupied=17
         init_points = preds_dicts['init_points']
         all_cls_scores = preds_dicts['all_cls_scores']
         all_refine_pts = preds_dicts['all_refine_pts']
@@ -180,22 +189,26 @@ class PointOccHead(BaseModule):
         result_list = []
         for i in range(batch_size):
             refine_pts, cls_scores = refine_pts[i], cls_scores[i]
-            scores, labels = cls_scores.max(dim=-1)
-            if self.test_cfg.get('score_thr', 0.3) != 0:
-                score_thr = self.test_cfg.get('score_thr', 0.3)
-                refine_pts = refine_pts[scores > score_thr]
+            refine_pts = refine_pts.flatten(0, 1)
+            cls_scores = cls_scores.flatten(0, 1)
+
+            refine_pts = decode_points(refine_pts, self.pc_range)
+            pts = torch.cat([refine_pts, cls_scores], dim=-1)
+            pts_infos, voxels, num_pts = self.voxel_generator(pts)
+            voxels = torch.flip(voxels, [1])
+
+            pts, scores = pts_infos[..., :3], pts_infos[..., 3:]
+            scores = scores.sum(dim=1) / num_pts[..., None]
+            scores, labels = scores.max(dim=-1)
+
+            if self.test_cfg.get('score_thr', 0) != 0:
+                score_thr = self.test_cfg.get('score_thr', 0)
+                voxels = voxels[scores > score_thr]
                 labels = labels[scores > score_thr]
             
-            refine_pts = decode_points(refine_pts, self.pc_range)
-            refine_pts[..., 0] = refine_pts[..., 0].clamp(pc_range[0], pc_range[3] - 1e-3)
-            refine_pts[..., 1] = refine_pts[..., 1].clamp(pc_range[1], pc_range[4] - 1e-3)
-            refine_pts[..., 2] = refine_pts[..., 2].clamp(pc_range[2], pc_range[5] - 1e-3)
-            occ_index = (refine_pts - pc_range[:3]) / voxel_size
-            occ_index = occ_index.long()
-
             result_list.append(dict(
                 sem_pred=labels.detach().cpu().numpy(),
-                occ_loc=occ_index.detach().cpu().numpy()))
+                occ_loc=voxels.detach().cpu().numpy()))
 
         return result_list
     

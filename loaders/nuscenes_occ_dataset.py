@@ -130,8 +130,8 @@ class NuScenesOccDataset(NuScenesDataset):
                 dense_shape=occ_labels.shape,
                 empty_value=17)
             
-            # pickle.dump(occ_pred, open('occ_pred.pkl', 'wb'))
-            # pickle.dump(occ_labels, open('occ_labels.pkl', 'wb'))
+            np.savez_compressed(f'results/{i}_occ_pred.npz', occ_pred)
+            np.savez_compressed(f'results/{i}_occ_label.npz', occ_labels)
             
             metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
         
