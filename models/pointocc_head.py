@@ -140,14 +140,15 @@ class PointOccHead(BaseModule):
         return loss_cls, loss_pts
     
     @force_fp32(apply_to=('preds_dicts'))
-    def loss(self, voxel_semantics, preds_dicts):
+    def loss(self, voxel_semantics, mask_camera, preds_dicts):
         # voxelsemantics [B, X200, Y200, Z16] unocuupied=17
         init_points = preds_dicts['init_points']
         all_cls_scores = preds_dicts['all_cls_scores']
         all_refine_pts = preds_dicts['all_refine_pts']
 
         num_dec_layers = len(all_cls_scores)
-        gt_points_list, gt_labels_list = self.get_sparse_voxels(voxel_semantics)
+        gt_points_list, gt_labels_list = self.get_sparse_voxels(
+            voxel_semantics, mask_camera)
         all_gt_points_list = [gt_points_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
 
@@ -212,7 +213,7 @@ class PointOccHead(BaseModule):
 
         return result_list
     
-    def get_sparse_voxels(self, voxel_semantics):
+    def get_sparse_voxels(self, voxel_semantics, mask_camera):
         B, W, H, Z = voxel_semantics.shape
         device = voxel_semantics.device
         voxel_semantics = voxel_semantics.long()
@@ -234,6 +235,8 @@ class PointOccHead(BaseModule):
         gt_points, gt_labels = [], []
         for i in range(B):
             mask = voxel_semantics[i] != self.num_classes
+            if self.train_cfg.get('use_camera_mask', False):
+                mask = mask & mask_camera[i]
             gt_points.append(coors[mask])
             gt_labels.append(voxel_semantics[i][mask])
         

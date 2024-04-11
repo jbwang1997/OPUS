@@ -130,8 +130,8 @@ class NuScenesOccDataset(NuScenesDataset):
                 dense_shape=occ_labels.shape,
                 empty_value=17)
             
-            np.savez_compressed(f'results/{i}_occ_pred.npz', occ_pred)
-            np.savez_compressed(f'results/{i}_occ_label.npz', occ_labels)
+            # np.savez_compressed(f'results/{i}_occ_pred.npz', occ_pred)
+            # np.savez_compressed(f'results/{i}_occ_label.npz', occ_labels)
             
             metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
         

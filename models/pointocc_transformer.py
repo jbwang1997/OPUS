@@ -25,6 +25,7 @@ class PointOccTransformer(BaseModule):
                  num_classes=10,
                  num_refines=16,
                  scales=[8.0],
+                 sep_layer=True,
                  pc_range=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
@@ -37,7 +38,7 @@ class PointOccTransformer(BaseModule):
 
         self.decoder = PointOccTransformerDecoder(
             embed_dims, num_frames, num_points, num_layers, num_levels,
-            num_classes, num_refines, scales, pc_range=pc_range)
+            num_classes, num_refines, scales, sep_layer, pc_range=pc_range)
 
     @torch.no_grad()
     def init_weights(self):
@@ -63,6 +64,7 @@ class PointOccTransformerDecoder(BaseModule):
                  num_classes=10,
                  num_refines=16,
                  scales=[8.0],
+                 sep_layer=True,
                  pc_range=[],
                  init_cfg=None):
         super(PointOccTransformerDecoder, self).__init__(init_cfg)
@@ -73,13 +75,22 @@ class PointOccTransformerDecoder(BaseModule):
             scales = scales * num_layers
 
         # params are shared across all decoder layers
-        self.decoder_layers = ModuleList()
-        for i in range(num_layers):
-            self.decoder_layers.append(
-                PointOccTransformerDecoderLayer(
-                    embed_dims, num_frames, num_points, num_levels, num_classes, 
-                    num_refines, layer_idx=i, scale=scales[i], pc_range=pc_range)
+        self.sep_layer = sep_layer
+        if self.sep_layer:
+            self.decoder_layers = ModuleList()
+            for i in range(num_layers):
+                self.decoder_layers.append(
+                    PointOccTransformerDecoderLayer(
+                        embed_dims, num_frames, num_points, num_levels, num_classes, 
+                        num_refines, layer_idx=i, scale=scales[i], pc_range=pc_range)
+                )
+        else:
+            self.decoder_layers = PointOccTransformerDecoderLayer(
+                embed_dims, num_frames, num_points, num_levels, num_classes, 
+                num_refines, layer_idx=0, scale=scales[0], pc_range=pc_range
             )
+
+
 
     @torch.no_grad()
     def init_weights(self):
@@ -110,18 +121,32 @@ class PointOccTransformerDecoder(BaseModule):
 
             mlvl_feats[lvl] = feat.contiguous()
 
-        for i, decoder_layer in enumerate(self.decoder_layers):
-            DUMP.stage_count = i
+        if self.sep_layer:
+            for i, decoder_layer in enumerate(self.decoder_layers):
+                DUMP.stage_count = i
 
-            query_feat, cls_score, refine_pt = decoder_layer(
-                query_points, query_feat, mlvl_feats, img_metas)
-            query_points = refine_pt.detach().mean(dim=-2)
+                query_feat, cls_score, refine_pt = decoder_layer(
+                    query_points, query_feat, mlvl_feats, img_metas)
+                query_points = refine_pt.detach().mean(dim=-2)
 
-            cls_scores.append(cls_score)
-            refine_pts.append(refine_pt)
+                cls_scores.append(cls_score)
+                refine_pts.append(refine_pt)
 
-        cls_scores = torch.stack(cls_scores)
-        refine_pts = torch.stack(refine_pts)
+            cls_scores = torch.stack(cls_scores)
+            refine_pts = torch.stack(refine_pts)
+        else:
+            for i in range(self.num_layers):
+                DUMP.stage_count = i
+
+                query_feat, cls_score, refine_pt = self.decoder_layers(
+                    query_points, query_feat, mlvl_feats, img_metas)
+                query_points = refine_pt.detach().mean(dim=-2)
+
+                cls_scores.append(cls_score)
+                refine_pts.append(refine_pt)
+
+            cls_scores = torch.stack(cls_scores)
+            refine_pts = torch.stack(refine_pts)
 
         return cls_scores, refine_pts
 

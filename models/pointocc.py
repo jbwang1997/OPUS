@@ -136,6 +136,7 @@ class PointOcc(MVXTwoStageDetector):
                           gt_bboxes_3d,
                           gt_labels_3d,
                           voxel_semantics,
+                          mask_camera,
                           img_metas,
                           gt_bboxes_ignore=None):
         """Forward function for point cloud branch.
@@ -154,7 +155,7 @@ class PointOcc(MVXTwoStageDetector):
         t1 = time.time()
         outs = self.pts_bbox_head(pts_feats, img_metas)
         t2 = time.time()
-        loss_inputs = [voxel_semantics, outs]
+        loss_inputs = [voxel_semantics, mask_camera, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
         t3 = time.time()
 
@@ -188,7 +189,8 @@ class PointOcc(MVXTwoStageDetector):
                       gt_bboxes_ignore=None,
                       img_depth=None,
                       img_mask=None,
-                      voxel_semantics=None):
+                      voxel_semantics=None,
+                      mask_camera=None):
         """Forward training function.
         Args:
             points (list[torch.Tensor], optional): Points of each sample.
@@ -217,6 +219,7 @@ class PointOcc(MVXTwoStageDetector):
                                         gt_bboxes_3d,
                                         gt_labels_3d,
                                         voxel_semantics,
+                                        mask_camera,
                                         img_metas,
                                         gt_bboxes_ignore)
 
