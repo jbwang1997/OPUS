@@ -62,8 +62,10 @@ def main():
             run_name = ''
             # if not cfgs.debug:
             #     run_name = input('Name your run (leave blank for default): ')
-            if run_name == '':
-                run_name = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+            if cfgs.get('run_name', None) is not None:
+                run_name = cfgs.run_name
+            # if run_name == '':
+            run_name += datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
 
             work_dir = os.path.join('outputs', cfgs.model.type, run_name)
             if os.path.exists(work_dir):  # must be an empty dir

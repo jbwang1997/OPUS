@@ -2,8 +2,9 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_cluster import knn
 from mmcv.runner import force_fp32, BaseModule
-from mmcv.ops import knn, Voxelization
+from mmcv.ops import Voxelization
 from mmdet.core import multi_apply, reduce_mean
 from mmdet.models import HEADS
 from mmdet.models.utils import build_transformer
@@ -22,8 +23,8 @@ class PointOccHead(BaseModule):
                  in_channels,
                  num_query,
                  transformer=None,
-                 pc_range=[],
                  empty_label=17,
+                 pc_range=[],
                  voxel_size=[],
                  train_cfg=dict(),
                  test_cfg=dict(max_per_img=100),
@@ -45,12 +46,12 @@ class PointOccHead(BaseModule):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.fp16_enabled = False
-        self.empty_label = empty_label
         self.loss_cls = build_loss(loss_cls)
         self.loss_pts = build_loss(loss_pts)
         self.transformer = build_transformer(transformer)
         self.num_refines = self.transformer.num_refines
         self.embed_dims = self.transformer.embed_dims
+        self.empty_label = empty_label
         self.voxel_generator = Voxelization(
             voxel_size=self.voxel_size,
             point_cloud_range=self.pc_range,
@@ -61,6 +62,7 @@ class PointOccHead(BaseModule):
 
     def _init_layers(self):
         self.init_query_points = nn.Embedding(self.num_query, 3)
+        # self.init_query_feat = nn.Embedding(self.num_query, self.embed_dims)
         nn.init.uniform_(self.init_query_points.weight, 0, 1)
 
     def init_weights(self):
@@ -84,23 +86,36 @@ class PointOccHead(BaseModule):
                     all_refine_pts=refine_pts)
 
     @torch.no_grad()
-    def _get_target_single(self, refine_pts, gt_points, gt_labels):
-        gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
-        gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
+    def _get_target_single(self,
+                           cls_scores,
+                           refine_pts,
+                           gt_points,
+                           gt_labels,
+                           voxels,
+                           mask_camera):
+        gt_paired_idx = knn(refine_pts, gt_points, 1)[1]
+        pred_paired_idx = knn(gt_points, refine_pts, 1)[1]
 
-        pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
-        pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
+        pc_range = refine_pts.new_tensor(self.pc_range)
+        voxel_size = refine_pts.new_tensor(self.voxel_size)
+        scene_size = (pc_range[3:] - pc_range[:3]) / voxel_size
+        idx = torch.floor((refine_pts - pc_range[:3]) / voxel_size)
+        clip_idx = idx.clone()
+        clip_idx[..., 0] = idx[..., 0].clamp(0, scene_size[0] - 1)
+        clip_idx[..., 1] = idx[..., 1].clamp(0, scene_size[1] - 1)
+        clip_idx[..., 2] = idx[..., 2].clamp(0, scene_size[2] - 1)
+        clip_idx = clip_idx.long()
 
-        refine_pts_labels = gt_labels[pred_paired_idx]
-        refine_pts_gt_pts = gt_points[pred_paired_idx]
-        dist = torch.norm(refine_pts-refine_pts_gt_pts, dim=-1)
+        pts_labels = voxels[clip_idx[:, 0], clip_idx[:, 1], clip_idx[:, 2]]
+        pts_labels = pts_labels.long()
+        pts_weights = mask_camera[clip_idx[:, 0], clip_idx[:, 1], clip_idx[:, 2]]
+        outside_mask = (idx[..., 0] < 0) | (idx[..., 0] >= scene_size[0]) | \
+                       (idx[..., 1] < 0) | (idx[..., 1] >= scene_size[1]) | \
+                       (idx[..., 2] < 0) | (idx[..., 2] >= scene_size[2])
+        pts_weights[outside_mask] = 0
+        pts_weights = pts_weights.float()
 
-        pos_dist = self.train_cfg.get('pos_dist', [0.2, 0.5])
-        min_pos_dist, max_pos_dist = min(pos_dist), max(pos_dist)
-        dist_thr = (dist.mean() * 0.2).clamp(min_pos_dist, max_pos_dist)
-        refine_pts_labels[dist > dist_thr] = self.empty_label
-
-        return refine_pts_labels, gt_paired_idx, pred_paired_idx
+        return pts_labels, pts_weights, gt_paired_idx, pred_paired_idx
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -110,16 +125,22 @@ class PointOccHead(BaseModule):
                     cls_scores,
                     refine_pts,
                     gt_points_list,
-                    gt_labels_list):
+                    gt_labels_list,
+                    voxel_semantics,
+                    mask_camera):
         num_imgs = cls_scores.size(0)
         cls_scores = cls_scores.view(num_imgs, -1, self.num_classes)
         refine_pts = refine_pts.view(num_imgs, -1, 3)
         refine_pts = decode_points(refine_pts, self.pc_range)
+
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
+        voxel_list = [voxel_semantics[i] for i in range(num_imgs)]
+        mask_list = [mask_camera[i] for i in range(num_imgs)]
 
-        (labels_list, gt_paired_idx_list, pred_paired_idx_list) = multi_apply(
-            self._get_target_single, refine_pts_list, gt_points_list, gt_labels_list)
+        (labels_list, weights_list, gt_paired_idx_list, pred_paired_idx_list) = \
+            multi_apply(self._get_target_single, cls_scores_list, refine_pts_list,
+                        gt_points_list, gt_labels_list, voxel_list, mask_list)
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
@@ -128,7 +149,19 @@ class PointOccHead(BaseModule):
         
         cls_scores = torch.cat(cls_scores_list)
         labels = torch.cat(labels_list)
-        loss_cls = self.loss_cls(cls_scores, labels, avg_factor=cls_scores.shape[0])
+        weights = torch.cat(weights_list)[..., None]
+        avg_factor = weights.sum()
+        occ_counts = self.train_cfg.get('occ_counts', None)
+        if occ_counts is not None:
+            occ_counts = cls_scores.new_tensor(occ_counts)
+            tgt_num = occ_counts[:-1].max() * 0.05
+            cls_weights = (tgt_num / occ_counts).clip(min=1)
+            weights = weights * cls_weights
+        loss_cls = self.loss_cls(
+            cls_scores,
+            labels,
+            weight=weights,
+            avg_factor=avg_factor)
         
         gt_pts = torch.cat(gt_points_list)
         gt_paired_pts = torch.cat(gt_paired_pts)
@@ -149,15 +182,16 @@ class PointOccHead(BaseModule):
         all_refine_pts = preds_dicts['all_refine_pts']
 
         num_dec_layers = len(all_cls_scores)
-        gt_points_list, gt_labels_list = self.get_sparse_voxels(
-            voxel_semantics, mask_camera)
+        gt_points_list, gt_labels_list = \
+            self.get_sparse_voxels(voxel_semantics, mask_camera)
         all_gt_points_list = [gt_points_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
+        all_voxel_sem_list = [voxel_semantics for _ in range(num_dec_layers)]
+        all_mask_camera_list = [mask_camera for _ in range(num_dec_layers)]
 
         losses_cls, losses_pts = multi_apply(
-            self.loss_single, all_cls_scores, all_refine_pts,
-            all_gt_points_list, all_gt_labels_list
-        )
+            self.loss_single, all_cls_scores, all_refine_pts, all_gt_points_list,
+            all_gt_labels_list, all_voxel_sem_list, all_mask_camera_list)
 
         loss_dict = dict()
         # loss of init_points
@@ -165,7 +199,8 @@ class PointOccHead(BaseModule):
             pseudo_scores = init_points.new_zeros(
                 *init_points.shape[:-1], self.num_classes)
             _, init_loss_pts = self.loss_single(
-                pseudo_scores, init_points, gt_points_list, gt_labels_list)
+                pseudo_scores, init_points, gt_points_list, gt_labels_list,
+                voxel_semantics, mask_camera)
             loss_dict['init_loss_pts'] = init_loss_pts
 
         # loss from the last decoder layer
@@ -241,5 +276,5 @@ class PointOccHead(BaseModule):
                 mask = mask & mask_camera[i]
             gt_points.append(coors[mask])
             gt_labels.append(voxel_semantics[i][mask])
-        
+
         return gt_points, gt_labels

@@ -31,6 +31,8 @@ class EgoPoseDataset(Dataset):
     def get_scene_token(self, info):
         if 'scene_token' in info:
             scene_name = info['scene_token']
+        elif 'scene_name' in info:
+            scene_name = info['scene_name']
         else:
             scene_name = info['occ_path'].split('occupancy/')[-1].split('/')[0]
         return scene_name

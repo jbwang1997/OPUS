@@ -8,12 +8,21 @@ from numpy import random
 
 def sparse2dense(indices, value, dense_shape, empty_value=0):
     N = indices.shape[0]
+    if isinstance(indices, torch.Tensor):
+        dense = indices.new_full(dense_shape, empty_value).long()
+        dense[indices[..., 0], indices[..., 1], indices[..., 2]] = value
+        
+        mask = indices.new_zeros(dense_shape).bool()
+        mask[indices[..., 0], indices[..., 1], indices[..., 2]] = 1
 
-    dense = np.ones(dense_shape, dtype=value.dtype) * empty_value
-    dense[indices[..., 0], indices[..., 1], indices[..., 2]] = value
-    
-    mask = np.zeros(dense_shape, dtype=np.bool_)
-    mask[indices[..., 0], indices[..., 1], indices[..., 2]] = 1
+    elif isinstance(indices, np.ndarray):
+        dense = np.ones(dense_shape, dtype=value.dtype) * empty_value
+        dense[indices[..., 0], indices[..., 1], indices[..., 2]] = value
+        
+        mask = np.zeros(dense_shape, dtype=np.bool_)
+        mask[indices[..., 0], indices[..., 1], indices[..., 2]] = 1
+    else:
+        raise NotImplementedError
 
     return dense, mask
 
@@ -56,6 +65,51 @@ class GridMask(nn.Module):
         x = x * mask 
 
         return x.view(n, c, h, w)
+
+
+class PositionalEncoding(nn.Module):
+    """Position embedding with learnable embedding weights.
+
+    Args:
+        num_feats (int): The feature dimension for each position
+            along x-axis or y-axis. The final returned dimension for
+            each position is 2 times of this value.
+        row_num_embed (int, optional): The dictionary size of row embeddings.
+            Default 50.
+        col_num_embed (int, optional): The dictionary size of col embeddings.
+            Default 50.
+        init_cfg (dict or list[dict], optional): Initialization config dict.
+    """
+
+    def __init__(self,
+                 num_feats,
+                 x_embed=200,
+                 y_embed=200,
+                 z_embed=16
+                 ):
+        self.x_embed = nn.Embedding(x_embed, num_feats)
+        self.y_embed = nn.Embedding(y_embed, num_feats)
+        self.z_embed = nn.Embedding(z_embed, num_feats)
+        self.num_feats = num_feats
+
+    def forward(self, pos):
+        """Forward function for `LearnedPositionalEncoding`.
+
+        Args:
+            mask (Tensor): ByteTensor mask. Non-zero values representing
+                ignored positions, while zero values means valid positions
+                for this image. Shape [bs, h, w].
+
+        Returns:
+            pos (Tensor): Returned position embedding with shape
+                [bs, num_feats*2, h, w].
+        """
+        x, y, z = pos.unbind(-1)
+        x_embed = self.x_embed(x)
+        y_embed = self.y_embed(y)
+        z_embed = self.z_embed(z)
+        embed = x_embed + y_embed + z_embed
+        return embed
 
 
 def rotation_3d_in_axis(points, angles):

@@ -16,7 +16,7 @@ from .utils import VERSION
 
 
 @HEADS.register_module()
-class PointOccHead(BaseModule):
+class PointOccHeadScore(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,
@@ -85,22 +85,34 @@ class PointOccHead(BaseModule):
 
     @torch.no_grad()
     def _get_target_single(self, refine_pts, gt_points, gt_labels):
+        ctr_pts = refine_pts.mean(dim=1)
+        ctr_paired_idx = knn(1, gt_points[None, ...], ctr_pts[None, ...])
+        ctr_paired_idx = ctr_paired_idx.permute(0, 2, 1).squeeze().long()
+        ctr_paired_labels = gt_labels[ctr_paired_idx]
+        ctr_paired_pts = gt_points[ctr_paired_idx]
+
+        dist = torch.norm(ctr_pts-ctr_paired_pts, dim=-1)
+        pos_dist = self.train_cfg.get('pos_dist', 0.4)
+        labels = ctr_paired_labels.clone()
+        labels[dist > pos_dist] = self.empty_label
+
+        device = refine_pts.device
+        pred_labels = ctr_paired_labels[..., None].expand(refine_pts.shape[:2])
+        pred_pts, pred_labels = refine_pts.reshape(-1, 3), pred_labels.reshape(-1)
+        gt_idx = torch.arange(gt_points.shape[0], device=device)
+        pred_paired_idx = gt_idx.new_zeros(pred_pts.shape[0])
+        for i in ctr_paired_labels.unique():
+            pred_mask, gt_mask = pred_labels == i, gt_labels == i
+            _pred_pts, _gt_pts = pred_pts[pred_mask], gt_points[gt_mask]
+
+            idx = knn(1, _gt_pts[None, ...], _pred_pts[None, ...])
+            idx = idx.permute(0, 2, 1).squeeze().long()
+            pred_paired_idx[pred_mask] = gt_idx[gt_mask][idx]
+        
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
 
-        pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
-        pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
-
-        refine_pts_labels = gt_labels[pred_paired_idx]
-        refine_pts_gt_pts = gt_points[pred_paired_idx]
-        dist = torch.norm(refine_pts-refine_pts_gt_pts, dim=-1)
-
-        pos_dist = self.train_cfg.get('pos_dist', [0.2, 0.5])
-        min_pos_dist, max_pos_dist = min(pos_dist), max(pos_dist)
-        dist_thr = (dist.mean() * 0.2).clamp(min_pos_dist, max_pos_dist)
-        refine_pts_labels[dist > dist_thr] = self.empty_label
-
-        return refine_pts_labels, gt_paired_idx, pred_paired_idx
+        return labels, gt_paired_idx, pred_paired_idx
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -112,8 +124,6 @@ class PointOccHead(BaseModule):
                     gt_points_list,
                     gt_labels_list):
         num_imgs = cls_scores.size(0)
-        cls_scores = cls_scores.view(num_imgs, -1, self.num_classes)
-        refine_pts = refine_pts.view(num_imgs, -1, 3)
         refine_pts = decode_points(refine_pts, self.pc_range)
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
@@ -121,6 +131,8 @@ class PointOccHead(BaseModule):
         (labels_list, gt_paired_idx_list, pred_paired_idx_list) = multi_apply(
             self._get_target_single, refine_pts_list, gt_points_list, gt_labels_list)
         
+        refine_pts_list = [pts.flatten(0, 1) for pts in refine_pts_list]
+
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
             gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
@@ -163,7 +175,7 @@ class PointOccHead(BaseModule):
         # loss of init_points
         if init_points is not None:
             pseudo_scores = init_points.new_zeros(
-                *init_points.shape[:-1], self.num_classes)
+                *init_points.shape[:2], self.num_classes)
             _, init_loss_pts = self.loss_single(
                 pseudo_scores, init_points, gt_points_list, gt_labels_list)
             loss_dict['init_loss_pts'] = init_loss_pts
@@ -181,8 +193,10 @@ class PointOccHead(BaseModule):
         return loss_dict
     
     def get_occ(self, pred_dicts, img_metas, rescale=False):
-        all_cls_scores = pred_dicts['all_cls_scores']
         all_refine_pts = pred_dicts['all_refine_pts']
+        all_cls_scores = pred_dicts['all_cls_scores']
+        all_cls_scores[..., None, :].expand(*all_refine_pts.shape[:-1], -1)
+
         cls_scores = all_cls_scores[-1].sigmoid()
         refine_pts = all_refine_pts[-1]
 

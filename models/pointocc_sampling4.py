@@ -118,7 +118,6 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, im
     # reorganize the sampled features
     C = final.shape[2]  # [BTG, Q, C, P]
     final = final.reshape(B, T, G, Q, C, P)
-    final = final.permute(0, 3, 2, 1, 5, 4)
-    final = final.flatten(3, 4)  # [B, Q, G, FP, C]
+    final = final.permute(0, 3, 2, 5, 1, 4) # [B, Q, G, P, F, C]
 
     return final

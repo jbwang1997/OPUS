@@ -112,7 +112,10 @@ class NuScenesOccDataset(NuScenesDataset):
         print('\nStarting Evaluation...')
         metric = Metric_mIoU(use_image_mask=True)
 
-        for i, result_dict in enumerate(occ_results):
+        from tqdm import tqdm
+        for i in tqdm(range(len(occ_results))):
+            result_dict = occ_results[i]
+        # for i, result_dict in enumerate(occ_results):
             info = self.get_data_info(i)
             token = info['sample_idx']
             scene_name = info['scene_name']
@@ -130,12 +133,63 @@ class NuScenesOccDataset(NuScenesDataset):
                 dense_shape=occ_labels.shape,
                 empty_value=17)
             
-            # np.savez_compressed(f'results/{i}_occ_pred.npz', occ_pred)
-            # np.savez_compressed(f'results/{i}_occ_label.npz', occ_labels)
+            # occ_pred_save = occ_pred.copy()
+            # occ_pred_save[~mask_camera] = 17
+            # occ_labels_save = occ_labels.copy()
+            # occ_labels_save[~mask_camera] = 17
+            # np.savez_compressed(f'pointocc_results/{i}_occ_pred.npz', occ_pred_save)
+            # np.savez_compressed(f'pointocc_results/{i}_occ_label.npz', occ_labels_save)
             
             metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
         
-        return metric.count_miou()
+        return {'mIoU': metric.count_miou()}
+    
+    # def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
+    #     occ_gts = []
+    #     occ_preds = []
+    #     lidar_origins = []
+
+    #     print('\nStarting Evaluation...')
+
+    #     from .ray_metrics import main as calc_rayiou
+    #     from .ego_pose_dataset import EgoPoseDataset
+
+    #     data_loader = DataLoader(
+    #         EgoPoseDataset(self.data_infos),
+    #         batch_size=1,
+    #         shuffle=False,
+    #         num_workers=8
+    #     )
+        
+    #     sample_tokens = [info['token'] for info in self.data_infos]
+
+    #     for i, batch in enumerate(data_loader):
+    #         token = batch[0][0]
+    #         output_origin = batch[1]
+            
+    #         data_id = sample_tokens.index(token)
+    #         info = self.data_infos[data_id]
+
+    #         token = info['token']
+    #         scene_name = info['scene_name']
+    #         occ_root = 'data/nuscenes/gts/'
+    #         occ_file = osp.join(occ_root, scene_name, token, 'labels.npz')
+    #         occ_infos = np.load(occ_file)
+    #         gt_semantics = occ_infos['semantics']
+
+    #         occ_pred = occ_results[data_id]
+    #         sem_pred = torch.from_numpy(occ_pred['sem_pred'])  # [B, N]
+    #         occ_loc = torch.from_numpy(occ_pred['occ_loc'].astype(np.int64))  # [B, N, 3]
+            
+    #         occ_size = list(gt_semantics.shape)
+    #         dense_sem_pred, _ = sparse2dense(occ_loc, sem_pred, dense_shape=occ_size, empty_value=17)
+    #         dense_sem_pred = dense_sem_pred.squeeze(0).numpy()
+
+    #         lidar_origins.append(output_origin)
+    #         occ_gts.append(gt_semantics)
+    #         occ_preds.append(dense_sem_pred)
+        
+    #     return calc_rayiou(occ_preds, occ_gts, lidar_origins)
 
     def format_results(self, occ_results,submission_prefix,**kwargs):
         if submission_prefix is not None:
