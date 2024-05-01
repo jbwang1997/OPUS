@@ -16,7 +16,7 @@ from .utils import VERSION
 
 
 @HEADS.register_module()
-class PointOccHeadNear(BaseModule):
+class PointOccHeadIgnore(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,
@@ -84,23 +84,31 @@ class PointOccHeadNear(BaseModule):
                     all_refine_pts=refine_pts)
 
     @torch.no_grad()
-    def _get_target_single(self, refine_pts, gt_points, gt_labels):
+    def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
 
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
         pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
-
         refine_pts_labels = gt_labels[pred_paired_idx]
-        refine_pts_gt_pts = gt_points[pred_paired_idx]
-        dist = torch.norm(refine_pts-refine_pts_gt_pts, dim=-1)
 
-        pos_dist = self.train_cfg.get('pos_dist', [0.2, 0.5])
-        min_pos_dist, max_pos_dist = min(pos_dist), max(pos_dist)
-        dist_thr = (dist.mean() * 0.2).clamp(min_pos_dist, max_pos_dist)
-        refine_pts_labels[dist > dist_thr] = self.empty_label
+        ignore_weight = self.train_cfg.get('ignore_weight', 0.2)
 
-        return refine_pts_labels, gt_paired_idx, pred_paired_idx
+        gt_pts_preds = refine_pts[gt_paired_idx]
+        gt_weights = refine_pts.new_ones(gt_pts_preds.shape[0])
+        dist = torch.norm(gt_points - gt_pts_preds, dim=-1)
+        empty_dist_thr = self.train_cfg.get('empty_dist_thr', 0.2)
+        empty_weights = self.train_cfg.get('empty_weights', 5)
+        mask = (dist > empty_dist_thr) & gt_masks
+        gt_weights[mask] = empty_weights
+        gt_weights[~gt_masks] = ignore_weight
+
+        pred_weights = refine_pts.new_ones(refine_pts.shape[0])
+        pred_paired_masks = gt_masks[pred_paired_idx]
+        pred_weights[~pred_paired_masks] = ignore_weight
+
+        return (refine_pts_labels, gt_weights, pred_weights,
+                gt_paired_idx, pred_paired_idx)
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -110,21 +118,8 @@ class PointOccHeadNear(BaseModule):
                     cls_scores,
                     refine_pts,
                     gt_points_list,
-                    gt_labels_list,
-                    only_pts=False):
-        if only_pts:
-            loss_near = refine_pts.new_tensor(0)
-        else:
-            nearest = torch.norm(
-                refine_pts[..., None, :, :]-refine_pts[..., :, None, :], dim=-1)
-            self_mask = torch.eye(nearest.shape[-1], device=nearest.device)
-            self_mask = self_mask[None, None, ...].expand_as(nearest)
-            nearest = nearest + self_mask * 1e6
-            avg_factor = nearest.size(0) * nearest.size(1)
-            near_dist = self.train_cfg.get('near_dist', 0.1)
-            near_weight = self.train_cfg.get('near_weight', 1.0)
-            loss_near = F.relu(near_dist - nearest).sum() / avg_factor * near_weight
-
+                    gt_masks_list,
+                    gt_labels_list):
         num_imgs = cls_scores.size(0)
         cls_scores = cls_scores.view(num_imgs, -1, self.num_classes)
         refine_pts = refine_pts.view(num_imgs, -1, 3)
@@ -132,21 +127,22 @@ class PointOccHeadNear(BaseModule):
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
-        (labels_list, gt_paired_idx_list, pred_paired_idx_list) = multi_apply(
-            self._get_target_single, refine_pts_list, gt_points_list, gt_labels_list)
+        (labels_list, gt_weights, pred_weights, gt_paired_idx_list, pred_paired_idx_list) = \
+            multi_apply(self._get_target_single, refine_pts_list, gt_points_list, 
+                        gt_masks_list, gt_labels_list)
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
             gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
             pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
-        
-        if only_pts:
-            loss_cls = refine_pts.new_tensor(0)
-        else:
-            cls_scores = torch.cat(cls_scores_list)
-            labels = torch.cat(labels_list)
-            loss_cls = self.loss_cls(cls_scores, labels, avg_factor=cls_scores.shape[0])
 
+        gt_weights = torch.cat(gt_weights)
+        pred_weights = torch.cat(pred_weights)
+        
+        cls_scores = torch.cat(cls_scores_list)
+        labels = torch.cat(labels_list)
+        loss_cls = self.loss_cls(
+            cls_scores, labels, weight=pred_weights, avg_factor=cls_scores.shape[0])
         
         gt_pts = torch.cat(gt_points_list)
         gt_paired_pts = torch.cat(gt_paired_pts)
@@ -154,10 +150,12 @@ class PointOccHeadNear(BaseModule):
         pred_paired_pts = torch.cat(pred_paired_pts)
 
         loss_pts = pred_pts.new_tensor(0)
-        loss_pts += self.loss_pts(gt_pts, gt_paired_pts, avg_factor=gt_pts.shape[0])
-        loss_pts += self.loss_pts(pred_pts, pred_paired_pts, avg_factor=pred_pts.shape[0])
+        loss_pts += self.loss_pts(
+            gt_pts, gt_paired_pts, weight=gt_weights[..., None], avg_factor=gt_pts.shape[0])
+        loss_pts += self.loss_pts(
+            pred_pts, pred_paired_pts, weight=pred_weights[..., None], avg_factor=pred_pts.shape[0])
 
-        return loss_near, loss_cls, loss_pts
+        return loss_cls, loss_pts
     
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self, voxel_semantics, mask_camera, preds_dicts):
@@ -167,14 +165,15 @@ class PointOccHeadNear(BaseModule):
         all_refine_pts = preds_dicts['all_refine_pts']
 
         num_dec_layers = len(all_cls_scores)
-        gt_points_list, gt_labels_list = self.get_sparse_voxels(
-            voxel_semantics, mask_camera)
+        gt_points_list, gt_masks_list, gt_labels_list = \
+            self.get_sparse_voxels(voxel_semantics, mask_camera)
         all_gt_points_list = [gt_points_list for _ in range(num_dec_layers)]
+        all_gt_masks_list = [gt_masks_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
 
-        losses_near, losses_cls, losses_pts = multi_apply(
-            self.loss_single, all_cls_scores, all_refine_pts,
-            all_gt_points_list, all_gt_labels_list
+        losses_cls, losses_pts = multi_apply(
+            self.loss_single, all_cls_scores, all_refine_pts, 
+            all_gt_points_list, all_gt_masks_list, all_gt_labels_list
         )
 
         loss_dict = dict()
@@ -182,21 +181,18 @@ class PointOccHeadNear(BaseModule):
         if init_points is not None:
             pseudo_scores = init_points.new_zeros(
                 *init_points.shape[:-1], self.num_classes)
-            _, _, init_loss_pts = self.loss_single(
-                pseudo_scores, init_points, gt_points_list, gt_labels_list,
-                only_pts=True)
+            _, init_loss_pts = self.loss_single(
+                pseudo_scores, init_points, gt_points_list, 
+                gt_masks_list, gt_labels_list)
             loss_dict['init_loss_pts'] = init_loss_pts
 
         # loss from the last decoder layer
-        loss_dict['loss_near'] = losses_near[-1]
         loss_dict['loss_cls'] = losses_cls[-1]
         loss_dict['loss_pts'] = losses_pts[-1]
 
         # loss from other decoder layers
         num_dec_layer = 0
-        for loss_near_i, loss_cls_i, loss_pts_i in zip(
-            losses_near[:-1], losses_cls[:-1], losses_pts[:-1]):
-            loss_dict[f'd{num_dec_layer}.loss_near'] = loss_near_i
+        for loss_cls_i, loss_pts_i in zip(losses_cls[:-1], losses_pts[:-1]):
             loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
             loss_dict[f'd{num_dec_layer}.loss_pts'] = loss_pts_i
             num_dec_layer += 1
@@ -256,12 +252,11 @@ class PointOccHeadNear(BaseModule):
         zz = z[None, None, :].expand(W, W, Z)
         coors = torch.stack([xx, yy, zz], dim=-1)
 
-        gt_points, gt_labels = [], []
+        gt_points, gt_masks, gt_labels = [], [], []
         for i in range(B):
             mask = voxel_semantics[i] != self.empty_label
-            if self.train_cfg.get('use_camera_mask', False):
-                mask = mask & mask_camera[i]
             gt_points.append(coors[mask])
+            gt_masks.append(mask_camera[i][mask])
             gt_labels.append(voxel_semantics[i][mask])
         
-        return gt_points, gt_labels
+        return gt_points, gt_masks, gt_labels

@@ -72,13 +72,15 @@ class LoadMultiViewImageFromMultiSweeps(object):
     def __init__(self,
                  sweeps_num=5,
                  color_type='color',
-                 test_mode=False):
+                 test_mode=False,
+                 train_interval=[4, 8],
+                 test_interval=6):
         self.sweeps_num = sweeps_num
         self.color_type = color_type
         self.test_mode = test_mode
 
-        self.train_interval = [4, 8]
-        self.test_interval = 6
+        self.train_interval = train_interval
+        self.test_interval = test_interval
 
         try:
             mmcv.use_backend('turbojpeg')

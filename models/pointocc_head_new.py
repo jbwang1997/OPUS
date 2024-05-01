@@ -16,7 +16,7 @@ from .utils import VERSION
 
 
 @HEADS.register_module()
-class PointOccHeadVisible(BaseModule):
+class PointOccHeadNew(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,
@@ -84,23 +84,23 @@ class PointOccHeadVisible(BaseModule):
                     all_refine_pts=refine_pts)
 
     @torch.no_grad()
-    def _get_target_single(self, refine_pts, gt_points, gt_labels):
+    def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
 
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
         pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
-
         refine_pts_labels = gt_labels[pred_paired_idx]
-        refine_pts_gt_pts = gt_points[pred_paired_idx]
-        dist = torch.norm(refine_pts-refine_pts_gt_pts, dim=-1)
 
-        # pos_dist = self.train_cfg.get('pos_dist', [0.2, 0.5])
-        # min_pos_dist, max_pos_dist = min(pos_dist), max(pos_dist)
-        # dist_thr = (dist.mean() * 0.2).clamp(min_pos_dist, max_pos_dist)
-        # refine_pts_labels[dist > dist_thr] = self.empty_label
+        gt_pts_preds = refine_pts[gt_paired_idx]
+        weights = refine_pts.new_ones(gt_pts_preds.shape[0])
+        dist = torch.norm(gt_points - gt_pts_preds, dim=-1)
+        empty_dist_thr = self.train_cfg.get('empty_dist_thr', 0.2)
+        empty_weights = self.train_cfg.get('empty_weights', 5)
+        mask = (dist > empty_dist_thr) & gt_masks
+        weights[mask] = empty_weights
 
-        return refine_pts_labels, gt_paired_idx, pred_paired_idx
+        return refine_pts_labels, weights, gt_paired_idx, pred_paired_idx
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -110,6 +110,7 @@ class PointOccHeadVisible(BaseModule):
                     cls_scores,
                     refine_pts,
                     gt_points_list,
+                    gt_masks_list,
                     gt_labels_list):
         num_imgs = cls_scores.size(0)
         cls_scores = cls_scores.view(num_imgs, -1, self.num_classes)
@@ -118,8 +119,9 @@ class PointOccHeadVisible(BaseModule):
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
-        (labels_list, gt_paired_idx_list, pred_paired_idx_list) = multi_apply(
-            self._get_target_single, refine_pts_list, gt_points_list, gt_labels_list)
+        (labels_list, gt_weights, gt_paired_idx_list, pred_paired_idx_list) = \
+            multi_apply(self._get_target_single, refine_pts_list, gt_points_list, 
+                        gt_masks_list, gt_labels_list)
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
@@ -131,12 +133,14 @@ class PointOccHeadVisible(BaseModule):
         loss_cls = self.loss_cls(cls_scores, labels, avg_factor=cls_scores.shape[0])
         
         gt_pts = torch.cat(gt_points_list)
+        gt_weights = torch.cat(gt_weights)
         gt_paired_pts = torch.cat(gt_paired_pts)
         pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
 
         loss_pts = pred_pts.new_tensor(0)
-        loss_pts += self.loss_pts(gt_pts, gt_paired_pts, avg_factor=gt_pts.shape[0])
+        loss_pts += self.loss_pts(
+            gt_pts, gt_paired_pts, weight=gt_weights[..., None], avg_factor=gt_pts.shape[0])
         loss_pts += self.loss_pts(pred_pts, pred_paired_pts, avg_factor=pred_pts.shape[0])
 
         return loss_cls, loss_pts
@@ -149,14 +153,15 @@ class PointOccHeadVisible(BaseModule):
         all_refine_pts = preds_dicts['all_refine_pts']
 
         num_dec_layers = len(all_cls_scores)
-        gt_points_list, gt_labels_list = self.get_sparse_voxels(
-            voxel_semantics, mask_camera)
+        gt_points_list, gt_masks_list, gt_labels_list = \
+            self.get_sparse_voxels(voxel_semantics, mask_camera)
         all_gt_points_list = [gt_points_list for _ in range(num_dec_layers)]
+        all_gt_masks_list = [gt_masks_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
 
         losses_cls, losses_pts = multi_apply(
-            self.loss_single, all_cls_scores, all_refine_pts,
-            all_gt_points_list, all_gt_labels_list
+            self.loss_single, all_cls_scores, all_refine_pts, 
+            all_gt_points_list, all_gt_masks_list, all_gt_labels_list
         )
 
         loss_dict = dict()
@@ -165,7 +170,8 @@ class PointOccHeadVisible(BaseModule):
             pseudo_scores = init_points.new_zeros(
                 *init_points.shape[:-1], self.num_classes)
             _, init_loss_pts = self.loss_single(
-                pseudo_scores, init_points, gt_points_list, gt_labels_list)
+                pseudo_scores, init_points, gt_points_list, 
+                gt_masks_list, gt_labels_list)
             loss_dict['init_loss_pts'] = init_loss_pts
 
         # loss from the last decoder layer
@@ -234,12 +240,11 @@ class PointOccHeadVisible(BaseModule):
         zz = z[None, None, :].expand(W, W, Z)
         coors = torch.stack([xx, yy, zz], dim=-1)
 
-        gt_points, gt_labels = [], []
+        gt_points, gt_masks, gt_labels = [], [], []
         for i in range(B):
             mask = voxel_semantics[i] != self.empty_label
-            if self.train_cfg.get('use_camera_mask', True):
-                mask = mask & mask_camera[i]
             gt_points.append(coors[mask])
+            gt_masks.append(mask_camera[i][mask])
             gt_labels.append(voxel_semantics[i][mask])
         
-        return gt_points, gt_labels
+        return gt_points, gt_masks, gt_labels
