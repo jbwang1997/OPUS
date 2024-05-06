@@ -54,9 +54,14 @@ def main():
 
     logging.info('Using GPU: %s' % torch.cuda.get_device_name(local_rank))
     torch.cuda.set_device(local_rank)
+
     if world_size > 1:
         logging.info('Initializing DDP with %d GPUs...' % world_size)
         dist.init_process_group('nccl', init_method='env://')
+
+    logging.info('Setting random seed: 0')
+    set_random_seed(0, deterministic=True)
+
     global_rank = dist.get_rank()  
 
     if global_rank == 0:
@@ -92,9 +97,6 @@ def main():
         logging.root.disabled = True
         work_dir = '/tmp'
 
-
-    logging.info('Setting random seed: 0')
-    set_random_seed(0, deterministic=True)
 
     logging.info('Loading training set from %s' % cfgs.dataset_root)
     train_dataset = build_dataset(cfgs.data.train)

@@ -55,6 +55,7 @@ class NuScenesOccDataset(NuScenesDataset):
         lidar2ego_rotation_mat = Quaternion(lidar2ego_rotation).rotation_matrix
 
         input_dict = dict(
+            pts_filename=info['lidar_path'],
             sample_idx=info['token'],
             scene_name=info['scene_name'],
             sweeps={'prev': sweeps_prev, 'next': sweeps_next},
@@ -103,8 +104,16 @@ class NuScenesOccDataset(NuScenesDataset):
             input_dict['ann_info'] = annos
 
         return input_dict
-
+    
     def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
+        results_dict = {}
+        results_dict.update(
+            self.eval_miou(occ_results, runner=runner, show_dir=show_dir, **eval_kwargs))
+        results_dict.update(
+            self.eval_riou(occ_results, runner=runner, show_dir=show_dir, **eval_kwargs))
+        return results_dict
+
+    def eval_miou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
         occ_gts = []
         occ_preds = []
         lidar_origins = []
@@ -144,52 +153,52 @@ class NuScenesOccDataset(NuScenesDataset):
         
         return {'mIoU': metric.count_miou()}
     
-    # def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-    #     occ_gts = []
-    #     occ_preds = []
-    #     lidar_origins = []
+    def eval_riou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
+        occ_gts = []
+        occ_preds = []
+        lidar_origins = []
 
-    #     print('\nStarting Evaluation...')
+        print('\nStarting Evaluation...')
 
-    #     from .ray_metrics import main as calc_rayiou
-    #     from .ego_pose_dataset import EgoPoseDataset
+        from .ray_metrics import main as calc_rayiou
+        from .ego_pose_dataset import EgoPoseDataset
 
-    #     data_loader = DataLoader(
-    #         EgoPoseDataset(self.data_infos),
-    #         batch_size=1,
-    #         shuffle=False,
-    #         num_workers=8
-    #     )
+        data_loader = DataLoader(
+            EgoPoseDataset(self.data_infos),
+            batch_size=1,
+            shuffle=False,
+            num_workers=8
+        )
         
-    #     sample_tokens = [info['token'] for info in self.data_infos]
+        sample_tokens = [info['token'] for info in self.data_infos]
 
-    #     for i, batch in enumerate(data_loader):
-    #         token = batch[0][0]
-    #         output_origin = batch[1]
+        for i, batch in enumerate(data_loader):
+            token = batch[0][0]
+            output_origin = batch[1]
             
-    #         data_id = sample_tokens.index(token)
-    #         info = self.data_infos[data_id]
+            data_id = sample_tokens.index(token)
+            info = self.data_infos[data_id]
 
-    #         token = info['token']
-    #         scene_name = info['scene_name']
-    #         occ_root = 'data/nuscenes/gts/'
-    #         occ_file = osp.join(occ_root, scene_name, token, 'labels.npz')
-    #         occ_infos = np.load(occ_file)
-    #         gt_semantics = occ_infos['semantics']
+            token = info['token']
+            scene_name = info['scene_name']
+            occ_root = 'data/nuscenes/gts/'
+            occ_file = osp.join(occ_root, scene_name, token, 'labels.npz')
+            occ_infos = np.load(occ_file)
+            gt_semantics = occ_infos['semantics']
 
-    #         occ_pred = occ_results[data_id]
-    #         sem_pred = torch.from_numpy(occ_pred['sem_pred'])  # [B, N]
-    #         occ_loc = torch.from_numpy(occ_pred['occ_loc'].astype(np.int64))  # [B, N, 3]
+            occ_pred = occ_results[data_id]
+            sem_pred = torch.from_numpy(occ_pred['sem_pred'])  # [B, N]
+            occ_loc = torch.from_numpy(occ_pred['occ_loc'].astype(np.int64))  # [B, N, 3]
             
-    #         occ_size = list(gt_semantics.shape)
-    #         dense_sem_pred, _ = sparse2dense(occ_loc, sem_pred, dense_shape=occ_size, empty_value=17)
-    #         dense_sem_pred = dense_sem_pred.squeeze(0).numpy()
+            occ_size = list(gt_semantics.shape)
+            dense_sem_pred, _ = sparse2dense(occ_loc, sem_pred, dense_shape=occ_size, empty_value=17)
+            dense_sem_pred = dense_sem_pred.squeeze(0).numpy()
 
-    #         lidar_origins.append(output_origin)
-    #         occ_gts.append(gt_semantics)
-    #         occ_preds.append(dense_sem_pred)
+            lidar_origins.append(output_origin)
+            occ_gts.append(gt_semantics)
+            occ_preds.append(dense_sem_pred)
         
-    #     return calc_rayiou(occ_preds, occ_gts, lidar_origins)
+        return calc_rayiou(occ_preds, occ_gts, lidar_origins)
 
     def format_results(self, occ_results,submission_prefix,**kwargs):
         if submission_prefix is not None:
