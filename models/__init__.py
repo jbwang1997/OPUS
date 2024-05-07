@@ -20,6 +20,7 @@ from .pointocc_head_cascade import PointOccHeadCascade
 from .pointocc_head_pointweight import PointOccHeadPointWeight
 from .pointocc_head_depth import PointOccHeadDepth
 from .pointocc_head_depth2 import PointOccHeadDepth2
+from .pointocc_head_depth3 import PointOccHeadDepth3
 from .pointocc_transformer import PointOccTransformer
 from .pointocc_transformer2 import PointOccTransformer2
 from .pointocc_transformer3 import PointOccTransformer3

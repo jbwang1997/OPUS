@@ -16,7 +16,7 @@ from .utils import VERSION, ASPP
 
 
 @HEADS.register_module()
-class PointOccHeadDepth2(BaseModule):
+class PointOccHeadDepth3(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,
@@ -37,16 +37,7 @@ class PointOccHeadDepth2(BaseModule):
                  num_proj_convs=2,
                  depth_range=[2.0, 42.0, 0.5],
                  depth_channels=80,
-                 loss_depth=dict(
-                    type='CrossEntropyLoss', 
-                    use_sigmoid=False,
-                    loss_weight=0.5
-                 ),
-                 loss_proj=dict(
-                    type='CrossEntropyLoss', 
-                    use_sigmoid=False,
-                    loss_weight=0.5
-                 ),
+                 loss_depth=dict(type='L1Loss', loss_weight=2),
                  init_cfg=None,
                  **kwargs):
         super().__init__(init_cfg)
@@ -73,9 +64,7 @@ class PointOccHeadDepth2(BaseModule):
 
         self.num_proj_convs = 2
         self.depth_range = depth_range
-        self.depth_channels = depth_channels
         self.loss_depth = build_loss(loss_depth)
-        self.loss_proj = build_loss(loss_proj)
         self._init_layers()
 
     def _init_layers(self):
@@ -94,12 +83,7 @@ class PointOccHeadDepth2(BaseModule):
         self.proj_branch = nn.Sequential(*proj_branch)
         self.depth_conv = nn.Conv2d(
             in_channels=self.in_channels,
-            out_channels=self.depth_channels,
-            kernel_size=3,
-            padding=1)
-        self.proj_conv = nn.Conv2d(
-            in_channels=self.in_channels,
-            out_channels=self.num_classes,
+            out_channels=1,
             kernel_size=3,
             padding=1)
 
@@ -112,11 +96,10 @@ class PointOccHeadDepth2(BaseModule):
 
         feat = self.proj_branch(feat.reshape(B * N, C, H, W))
         depth_pred = self.depth_conv(feat).reshape(B, N, -1, H, W)
-        proj_pred = self.proj_conv(feat).reshape(B, N, -1, H, W)
-        return depth_pred, proj_pred
+        return depth_pred
 
     def forward(self, mlvl_feats, img_metas):
-        depth_pred, proj_pred = self.forward_proj_branch(mlvl_feats)
+        depth_pred = self.forward_proj_branch(mlvl_feats)
 
         B = mlvl_feats[0].shape[0]
         query_points = self.init_query_points.weight[None, ...].repeat(B, 1, 1)
@@ -131,7 +114,6 @@ class PointOccHeadDepth2(BaseModule):
         )
 
         return dict(depth_pred=depth_pred,
-                    proj_pred=proj_pred,
                     init_points=query_points.unsqueeze(2),
                     all_cls_scores=cls_scores,
                     all_refine_pts=refine_pts)
@@ -246,22 +228,14 @@ class PointOccHeadDepth2(BaseModule):
         
         # depth and proj label losses
         depth_pred = preds_dicts['depth_pred']
-        proj_pred = preds_dicts['proj_pred']
         valid_mask = proj_label != 17
 
-        proj_label = proj_label[valid_mask]
-        proj_pred = proj_pred.permute(0, 1, 3, 4, 2)[valid_mask]
-        loss_proj = self.loss_proj(
-            proj_pred, proj_label, avg_factor=proj_pred.shape[0])
-        loss_dict['loss_proj'] = loss_proj
-
-        depth = depth_map[valid_mask]
-        depth = depth.clamp(self.depth_range[0]+1e-5, self.depth_range[1]-1e-5)
-        depth_label = (depth - self.depth_range[0]) / self.depth_range[2]
-        depth_label = depth_label.long()
+        depth = (depth_map[valid_mask] - self.depth_range[0]) / self.depth_range[1]
+        depth = (depth - 0.5) * 2
         depth_pred = depth_pred.permute(0, 1, 3, 4, 2)[valid_mask]
+        depth_pred = depth_pred.reshape(-1)
         loss_depth = self.loss_depth(
-            depth_pred, depth_label, avg_factor=depth_pred.shape[0])
+            depth_pred, depth, avg_factor=depth_pred.shape[0])
         loss_dict['loss_depth'] = loss_depth
         
         return loss_dict
