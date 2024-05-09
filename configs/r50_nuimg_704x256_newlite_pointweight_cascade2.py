@@ -35,7 +35,7 @@ num_query = 2400
 num_frames = 8
 num_levels = 4
 num_points = 2
-num_refines = [1, 2, 4, 8, 16, 32]
+num_refines = [8, 8, 16, 16, 32, 32]
 
 img_backbone = dict(
     type='ResNet',
@@ -203,7 +203,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 100
+total_epochs = 12
 batch_size = 8
 
 # load pretrained weights

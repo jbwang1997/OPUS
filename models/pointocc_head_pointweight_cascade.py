@@ -93,8 +93,8 @@ class PointOccHeadPointWeightCascade(BaseModule):
         self.transformer.init_weights()
 
     def forward(self, mlvl_feats, img_metas):
-        B, Q, R = mlvl_feats[0].shape[0], self.num_query, self.num_refines[0]
-        init_points = self.init_points.weight[None, :, None, :].repeat(B, 1, R, 1)
+        B, Q, = mlvl_feats[0].shape[0], self.num_query
+        init_points = self.init_points.weight[None, :, None, :].repeat(B, 1, 1, 1)
         query_feat = init_points.new_zeros(B, Q, self.embed_dims)
 
         cls_scores, refine_pts = self.transformer(
