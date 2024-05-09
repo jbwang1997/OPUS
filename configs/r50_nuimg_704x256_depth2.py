@@ -202,7 +202,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 12
-batch_size = 8
+batch_size = 2
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
@@ -218,7 +218,7 @@ checkpoint_config = dict(interval=1, max_keep_ckpts=1)
 log_config = dict(
     interval=1,
     hooks=[
-        dict(type='TextLoggerHook', interval=50, reset_flag=True),
+        dict(type='TextLoggerHook', interval=1, reset_flag=True),
         dict(type='MyTensorboardLoggerHook', interval=500, reset_flag=True)
     ]
 )

@@ -121,10 +121,10 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
-    dict(type='LoadOcctoDepthMap', pc_range=point_cloud_range, downsample=4),
+    # dict(type='LoadOcctoDepthMap', pc_range=point_cloud_range, downsample=4),
     # dict(type='LoadLidartoDepthMap', downsample=16),
     dict(type='DefaultFormatBundle3D', class_names=object_names),
-    dict(type='Collect3D', keys=['img', 'depth_map', 'proj_label', 'voxel_semantics', 'mask_camera'], meta_keys=(
+    dict(type='Collect3D', keys=['img', 'voxel_semantics', 'mask_camera'], meta_keys=(
         'filename', 'ori_shape', 'img_shape', 'pad_shape', 'lidar2img', 'img_timestamp', 'ego2lidar'))
 ]
 
@@ -146,7 +146,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    workers_per_gpu=8,
+    workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=dataset_root,
@@ -218,7 +218,7 @@ checkpoint_config = dict(interval=1, max_keep_ckpts=1)
 log_config = dict(
     interval=1,
     hooks=[
-        dict(type='TextLoggerHook', interval=50, reset_flag=True),
+        dict(type='TextLoggerHook', interval=1, reset_flag=True),
         dict(type='MyTensorboardLoggerHook', interval=500, reset_flag=True)
     ]
 )

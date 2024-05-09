@@ -67,7 +67,7 @@ model = dict(
     img_backbone=img_backbone,
     img_neck=img_neck,
     pts_bbox_head=dict(
-        type='PointOccHeadDepth4',
+        type='PointOccHeadDepth3',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
@@ -91,7 +91,8 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=2.0),
-        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5)),
+        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5),
+        loss_depth=dict(type='L1Loss', loss_weight=1)),
     train_cfg=dict(
         pts=dict(
             grid_size=[512, 512, 1],

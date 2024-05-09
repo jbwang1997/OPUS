@@ -15,7 +15,7 @@ from .csrc.wrapper import MSMV_CUDA
 
 
 @TRANSFORMER.register_module()
-class PointOccTransformerPoint3(BaseModule):
+class PointOccTransformerPointCascade(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -23,14 +23,14 @@ class PointOccTransformerPoint3(BaseModule):
                  num_layers=6,
                  num_levels=4,
                  num_classes=10,
-                 num_refines=16,
+                 num_refines=[1, 2, 4, 8, 16, 32],
                  scales=[8.0],
                  sep_layer=True,
                  pc_range=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
                             'behavior, init_cfg is not allowed to be set'
-        super(PointOccTransformerPoint3, self).__init__(init_cfg=init_cfg)
+        super(PointOccTransformerPointCascade, self).__init__(init_cfg=init_cfg)
 
         self.embed_dims = embed_dims
         self.pc_range = pc_range
@@ -48,8 +48,8 @@ class PointOccTransformerPoint3(BaseModule):
         cls_scores, refine_pts = self.decoder(
             query_points, query_feat, mlvl_feats, img_metas)
 
-        cls_scores = torch.nan_to_num(cls_scores)
-        refine_pts = torch.nan_to_num(refine_pts)
+        cls_scores = [torch.nan_to_num(score) for score in cls_scores]
+        refine_pts = [torch.nan_to_num(pts) for pts in refine_pts]
 
         return cls_scores, refine_pts
 
@@ -73,6 +73,11 @@ class PointOccTransformerDecoder(BaseModule):
 
         if len(scales) == 1:
             scales = scales * num_layers
+        if not isinstance(num_refines, list):
+            num_refines = [num_refines]
+        if len(num_refines) == 1:
+            num_refines = num_refines * num_layers
+        last_refines = [1] + num_refines
 
         # params are shared across all decoder layers
         self.sep_layer = sep_layer
@@ -82,12 +87,14 @@ class PointOccTransformerDecoder(BaseModule):
                 self.decoder_layers.append(
                     PointOccTransformerDecoderLayer(
                         embed_dims, num_frames, num_points, num_levels, num_classes, 
-                        num_refines, layer_idx=i, scale=scales[i], pc_range=pc_range)
+                        num_refines[i], last_refines[i], layer_idx=i, scale=scales[i],
+                        pc_range=pc_range)
                 )
         else:
             self.decoder_layers = PointOccTransformerDecoderLayer(
                 embed_dims, num_frames, num_points, num_levels, num_classes, 
-                num_refines, layer_idx=0, scale=scales[0], pc_range=pc_range
+                num_refines[-1], last_refines[-1], layer_idx=0, scale=scales[0],
+                pc_range=pc_range
             )
 
 
@@ -132,8 +139,6 @@ class PointOccTransformerDecoder(BaseModule):
                 cls_scores.append(cls_score)
                 refine_pts.append(query_points)
 
-            cls_scores = torch.stack(cls_scores)
-            refine_pts = torch.stack(refine_pts)
         else:
             for i in range(self.num_layers):
                 DUMP.stage_count = i
@@ -144,9 +149,6 @@ class PointOccTransformerDecoder(BaseModule):
 
                 cls_scores.append(cls_score)
                 refine_pts.append(query_points)
-
-            cls_scores = torch.stack(cls_scores)
-            refine_pts = torch.stack(refine_pts)
 
         return cls_scores, refine_pts
 
@@ -159,6 +161,7 @@ class PointOccTransformerDecoderLayer(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
+                 last_refines=16,
                  num_cls_fcs=2,
                  num_reg_fcs=2,
                  layer_idx=0,
@@ -172,9 +175,11 @@ class PointOccTransformerDecoderLayer(BaseModule):
         self.pc_range = pc_range
         self.num_points = num_points
         self.num_refines = num_refines
+        self.last_refines = last_refines
+        self.layer_idx = layer_idx
 
         self.position_encoder = nn.Sequential(
-            nn.Linear(3 * self.num_refines, self.embed_dims), 
+            nn.Linear(3 * self.last_refines, self.embed_dims), 
             nn.LayerNorm(self.embed_dims),
             nn.ReLU(inplace=True),
             nn.Linear(self.embed_dims, self.embed_dims),
@@ -407,7 +412,6 @@ class PointOccSampling(BaseModule):
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.pc_range = pc_range
-        self.scale = Scale()
 
         self.sampling_offset = nn.Linear(embed_dims, num_groups * num_points * 3)
         # self.sampling_center = nn.Linear(embed_dims, 3)
@@ -431,11 +435,15 @@ class PointOccSampling(BaseModule):
 
         # query points
         query_points = decode_points(query_points, self.pc_range)
-        query_center = query_points.mean(dim=2, keepdim=True)
-        query_scale = query_points.std(dim=2, keepdim=True)
+        if query_points.shape[2] == 1:
+            query_center = query_points
+            query_scale = torch.zeros_like(query_center)
+        else:
+            query_center = query_points.mean(dim=2, keepdim=True)
+            query_scale = query_points.std(dim=2, keepdim=True)
 
         # sampling offset of all frames
-        sampling_offset = self.scale(self.sampling_offset(query_feat))
+        sampling_offset = self.sampling_offset(query_feat)
         sampling_offset = sampling_offset.view(B, Q, -1, 3)
         # # mean, std = sampling_offset.mean(2, keepdim=True), sampling_offset.std(2, keepdim=True)
         # # sampling_offset = (sampling_offset - mean) / (std + 1e-4)

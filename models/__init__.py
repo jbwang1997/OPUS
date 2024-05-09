@@ -21,13 +21,15 @@ from .pointocc_head_pointweight import PointOccHeadPointWeight
 from .pointocc_head_depth import PointOccHeadDepth
 from .pointocc_head_depth2 import PointOccHeadDepth2
 from .pointocc_head_depth3 import PointOccHeadDepth3
+from .pointocc_head_depth4 import PointOccHeadDepth4
+from .pointocc_head_pointweight_cascade import PointOccHeadPointWeightCascade
 from .pointocc_transformer import PointOccTransformer
 from .pointocc_transformer2 import PointOccTransformer2
 from .pointocc_transformer3 import PointOccTransformer3
 from .pointocc_transformer_point import PointOccTransformerPoint
 from .pointocc_transformer_point2 import PointOccTransformerPoint2
-from .pointocc_transformer_point3 import PointOccTransformerPoint3
 from .pointocc_transformer_cascade import PointOccTransformerCascade
+from .pointocc_transformer_point_cascade import PointOccTransformerPointCascade
 
 __all__ = [
     'SparseBEV', 'SparseBEVHead', 'SparseBEVTransformer', 'PointOccHead',

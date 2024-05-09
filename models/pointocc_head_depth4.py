@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from mmcv.runner import force_fp32, BaseModule
 from mmcv.ops import knn, Voxelization
 from mmdet.core import multi_apply, reduce_mean
@@ -16,7 +17,7 @@ from .utils import VERSION, ASPP
 
 
 @HEADS.register_module()
-class PointOccHeadDepth3(BaseModule):
+class PointOccHeadDepth4(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,
@@ -35,9 +36,8 @@ class PointOccHeadDepth3(BaseModule):
                     loss_weight=2.0),
                  loss_pts=dict(type='L1Loss'),
                  num_proj_convs=2,
-                 depth_range=[2.0, 42.0, 0.5],
-                 depth_channels=80,
-                 loss_depth=dict(type='L1Loss', loss_weight=2),
+                 merge_all_levels=True,
+                 depth_downsample=16,
                  init_cfg=None,
                  **kwargs):
         super().__init__(init_cfg)
@@ -63,43 +63,99 @@ class PointOccHeadDepth3(BaseModule):
         )
 
         self.num_proj_convs = num_proj_convs
-        self.depth_range = depth_range
-        self.loss_depth = build_loss(loss_depth)
+        self.merge_all_levels = merge_all_levels
+        self.depth_downsample = depth_downsample
         self._init_layers()
 
     def _init_layers(self):
         self.init_query_points = nn.Embedding(self.num_query, 3)
         nn.init.uniform_(self.init_query_points.weight, 0, 1)
 
-        proj_branch = []
+        depth_branch = []
+        in_channels = self.in_channels * 4 if self.merge_all_levels \
+            else self.in_channels
         for i in range(self.num_proj_convs):
-            proj_branch.append(nn.Conv2d(
-                in_channels=self.in_channels,
+            depth_branch.append(nn.Conv2d(
+                in_channels=in_channels,
                 out_channels=self.in_channels,
                 kernel_size=3,
                 padding=1))
-            proj_branch.append(nn.BatchNorm2d(self.in_channels))
-            proj_branch.append(nn.ReLU(inplace=True))
-        self.proj_branch = nn.Sequential(*proj_branch)
+            depth_branch.append(nn.BatchNorm2d(self.in_channels))
+            depth_branch.append(nn.ReLU(inplace=True))
+            in_channels = self.in_channels
+        self.depth_branch = nn.Sequential(*depth_branch)
         self.depth_conv = nn.Conv2d(
             in_channels=self.in_channels,
             out_channels=1,
+            kernel_size=3,
+            padding=1)
+        self.offset_conv = nn.Conv2d(
+            in_channels=self.in_channels,
+            out_channels=2,
             kernel_size=3,
             padding=1)
 
     def init_weights(self):
         self.transformer.init_weights()
     
-    def forward_proj_branch(self, mlvl_feats):
-        feat = mlvl_feats[0][:, :6]
-        B, N, C, H, W = feat.shape
+    def forward_depth_branch(self, mlvl_feats, img_metas):
+        if not self.merge_all_levels:
+            mlvl_feats = [mlvl_feats[0]]
+        B = mlvl_feats[0].shape[0]
+        
+        feat = []
+        depth_shape = (img_metas[0]['input_shape'][0] // self.depth_downsample,
+                       img_metas[0]['input_shape'][1] // self.depth_downsample)
+        for x in mlvl_feats:
+            C, H, W = x.shape[-3:]
+            x = x[:, :6].reshape(B * 6, C, H, W)
+            feat.append(F.interpolate(x, depth_shape))
+        
+        feat = self.depth_branch(torch.cat(feat, dim=1))
+        offset = self.offset_conv(feat)
+        offset = offset.reshape(B, 6, 2, depth_shape[0], depth_shape[1])
+        depth = self.depth_conv(feat).exp()
+        depth = depth.reshape(B, 6, 1, depth_shape[0], depth_shape[1])
+        return offset, depth
+    
+    def construct_pc_by_depth(self, offset, depth, img_metas):
+        B, _, _, H, W = depth.shape
+        device = depth.device
 
-        feat = self.proj_branch(feat.reshape(B * N, C, H, W))
-        depth_pred = self.depth_conv(feat).reshape(B, N, -1, H, W)
-        return depth_pred
+        x = (torch.arange(W, device=device).float() + 0.5) * self.depth_downsample
+        y = (torch.arange(H, device=device).float() + 0.5) * self.depth_downsample
+        xx = x[None, None, None, :].expand(B, 6, H, W)
+        yy = y[None, None, :, None].expand(B, 6, H, W)
+        coors = torch.stack([xx, yy], dim=2)
+
+        coors = coors + offset
+        ones = torch.ones_like(depth)
+        points = torch.cat([coors * depth, depth, ones], dim=2)
+        points = points.permute(0, 1, 3, 4, 2).reshape(B, 6, -1, 4)
+
+        lidar2img = np.asarray([m['lidar2img'][:6] for m in img_metas]).astype(np.float32)
+        lidar2img = torch.from_numpy(lidar2img).to(device)  # [B, 6, 4, 4]
+        ego2lidar = np.asarray([m['ego2lidar'][:6] for m in img_metas]).astype(np.float32)
+        ego2lidar = torch.from_numpy(ego2lidar).to(device)  # [B, 6, 4, 4]
+        img2ego = torch.linalg.inv(torch.matmul(lidar2img, ego2lidar))
+
+        points = points.permute(0, 1, 3, 2)
+        points = torch.matmul(img2ego, points)
+        points = points.permute(0, 1, 3, 2)[..., :3]
+        points = points.reshape(B, -1, 3)
+        points = encode_points(points, self.pc_range)
+
+        sampled_points = points.detach()
+        index = torch.randperm(sampled_points.shape[1])
+        sampled_points = sampled_points[:, index]
+        sampled_points = sampled_points[:, :self.num_query]
+
+        return points, sampled_points
 
     def forward(self, mlvl_feats, img_metas):
-        depth_pred = self.forward_proj_branch(mlvl_feats)
+        offset, depth = self.forward_depth_branch(mlvl_feats, img_metas)
+        init_points, query_points = \
+            self.construct_pc_by_depth(offset, depth, img_metas)
 
         B = mlvl_feats[0].shape[0]
         query_points = self.init_query_points.weight[None, ...].repeat(B, 1, 1)
@@ -113,8 +169,7 @@ class PointOccHeadDepth3(BaseModule):
             img_metas=img_metas,
         )
 
-        return dict(depth_pred=depth_pred,
-                    init_points=query_points.unsqueeze(2),
+        return dict(init_points=init_points,
                     all_cls_scores=cls_scores,
                     all_refine_pts=refine_pts)
 
@@ -225,18 +280,6 @@ class PointOccHeadDepth3(BaseModule):
             loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
             loss_dict[f'd{num_dec_layer}.loss_pts'] = loss_pts_i
             num_dec_layer += 1
-        
-        # depth and proj label losses
-        depth_pred = preds_dicts['depth_pred']
-        valid_mask = proj_label != 17
-
-        depth = (depth_map[valid_mask] - self.depth_range[0]) / self.depth_range[1]
-        depth = (depth - 0.5) * 2
-        depth_pred = depth_pred.permute(0, 1, 3, 4, 2)[valid_mask]
-        depth_pred = depth_pred.reshape(-1)
-        loss_depth = self.loss_depth(
-            depth_pred, depth, avg_factor=depth_pred.shape[0])
-        loss_dict['loss_depth'] = loss_depth
         
         return loss_dict
     

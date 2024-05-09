@@ -32,7 +32,7 @@ voxel_size = [0.4, 0.4, 0.4]
 embed_dims = 256
 num_layers = 6
 num_query = 2400
-num_frames = 8
+num_frames = 16
 num_levels = 4
 num_points = 2
 num_refines = 32
@@ -58,7 +58,7 @@ img_norm_cfg = dict(
     to_rgb=True)
 
 model = dict(
-    type='PointOccDepth',
+    type='PointOcc',
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
@@ -67,7 +67,7 @@ model = dict(
     img_backbone=img_backbone,
     img_neck=img_neck,
     pts_bbox_head=dict(
-        type='PointOccHeadDepth4',
+        type='PointOccHeadPointWeight',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
@@ -75,7 +75,7 @@ model = dict(
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
         transformer=dict(
-            type='PointOccTransformer',
+            type='PointOccTransformerPoint2',
             embed_dims=embed_dims,
             num_frames=num_frames,
             num_points=num_points,
@@ -91,7 +91,11 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=2.0),
-        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5)),
+        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5),
+        manual_set=True,
+        manual_mode='2',
+        dis_mode='fb',
+        ),
     train_cfg=dict(
         pts=dict(
             grid_size=[512, 512, 1],
@@ -121,10 +125,8 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
-    dict(type='LoadOcctoDepthMap', pc_range=point_cloud_range, downsample=4),
-    # dict(type='LoadLidartoDepthMap', downsample=16),
     dict(type='DefaultFormatBundle3D', class_names=object_names),
-    dict(type='Collect3D', keys=['img', 'depth_map', 'proj_label', 'voxel_semantics', 'mask_camera'], meta_keys=(
+    dict(type='Collect3D', keys=['img', 'voxel_semantics', 'mask_camera'], meta_keys=(
         'filename', 'ori_shape', 'img_shape', 'pad_shape', 'lidar2img', 'img_timestamp', 'ego2lidar'))
 ]
 
@@ -146,7 +148,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    workers_per_gpu=8,
+    workers_per_gpu=4,
     train=dict(
         type=dataset_type,
         data_root=dataset_root,
@@ -201,7 +203,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 12
+total_epochs = 100
 batch_size = 8
 
 # load pretrained weights
@@ -229,4 +231,4 @@ eval_config = dict(interval=total_epochs)
 # other flags
 debug = False
 
-run_name = 'depth2'
+run_name = 'point_weight_long'

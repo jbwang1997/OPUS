@@ -8,15 +8,25 @@ from mmdet.core import multi_apply, reduce_mean
 from mmdet.models import HEADS
 from mmdet.models.utils import build_transformer
 from mmdet.models.builder import build_loss
-from mmdet.models.backbones.resnet import BasicBlock
 from mmdet3d.core.bbox.coders import build_bbox_coder
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from .bbox.utils import normalize_bbox, encode_points, decode_points
-from .utils import VERSION, ASPP
+from .utils import VERSION
+import numpy as np
+
+manual_list=[11, 16, 15, 14, 13,  4, 10, 12,  3,  9,  7,  1,  0,  5,  8,  6,  2]
+manual_list.reverse()
+manual_weight=np.ones(len(manual_list))
+manual_list_array=np.array(manual_list)
+manual_weight[manual_list_array[:5]]=10
+manual_weight[manual_list_array[5:12]]=5
+
+manual_weight2=manual_weight.copy()
+manual_weight2[15]=2
 
 
 @HEADS.register_module()
-class PointOccHeadDepth3(BaseModule):
+class PointOccHeadPointWeightCascade(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,
@@ -34,11 +44,10 @@ class PointOccHeadDepth3(BaseModule):
                     alpha=0.25,
                     loss_weight=2.0),
                  loss_pts=dict(type='L1Loss'),
-                 num_proj_convs=2,
-                 depth_range=[2.0, 42.0, 0.5],
-                 depth_channels=80,
-                 loss_depth=dict(type='L1Loss', loss_weight=2),
                  init_cfg=None,
+                 manual_set=False,
+                 manual_mode='1',
+                 dis_mode='fb',
                  **kwargs):
         super().__init__(init_cfg)
         self.num_query = num_query
@@ -59,64 +68,46 @@ class PointOccHeadDepth3(BaseModule):
             voxel_size=self.voxel_size,
             point_cloud_range=self.pc_range,
             max_num_points=10, 
-            max_voxels=self.num_query * self.num_refines,
+            max_voxels=self.num_query * self.num_refines[-1],
         )
 
-        self.num_proj_convs = num_proj_convs
-        self.depth_range = depth_range
-        self.loss_depth = build_loss(loss_depth)
+        if manual_set:
+            if manual_mode=='1':
+                self.cls_weight=manual_weight
+            elif manual_mode=='2':
+                self.cls_weight=manual_weight2
+            self.cls_weight=torch.from_numpy(self.cls_weight)
+        else:
+            self.cls_weight=torch.ones(num_classes) # 17
+
+        self.dis_mode=dis_mode
+
         self._init_layers()
 
     def _init_layers(self):
-        self.init_query_points = nn.Embedding(self.num_query, 3)
-        nn.init.uniform_(self.init_query_points.weight, 0, 1)
-
-        proj_branch = []
-        for i in range(self.num_proj_convs):
-            proj_branch.append(nn.Conv2d(
-                in_channels=self.in_channels,
-                out_channels=self.in_channels,
-                kernel_size=3,
-                padding=1))
-            proj_branch.append(nn.BatchNorm2d(self.in_channels))
-            proj_branch.append(nn.ReLU(inplace=True))
-        self.proj_branch = nn.Sequential(*proj_branch)
-        self.depth_conv = nn.Conv2d(
-            in_channels=self.in_channels,
-            out_channels=1,
-            kernel_size=3,
-            padding=1)
+        self.init_points = nn.Embedding(self.num_query, 3)
+        nn.init.uniform_(self.init_points.weight, 0, 1)
+        # nn.init.uniform_(self.init_points_offset.weight, -0.1, 0.1)
 
     def init_weights(self):
         self.transformer.init_weights()
-    
-    def forward_proj_branch(self, mlvl_feats):
-        feat = mlvl_feats[0][:, :6]
-        B, N, C, H, W = feat.shape
-
-        feat = self.proj_branch(feat.reshape(B * N, C, H, W))
-        depth_pred = self.depth_conv(feat).reshape(B, N, -1, H, W)
-        return depth_pred
 
     def forward(self, mlvl_feats, img_metas):
-        depth_pred = self.forward_proj_branch(mlvl_feats)
+        B, Q, R = mlvl_feats[0].shape[0], self.num_query, self.num_refines[0]
+        init_points = self.init_points.weight[None, :, None, :].repeat(B, 1, R, 1)
+        query_feat = init_points.new_zeros(B, Q, self.embed_dims)
 
-        B = mlvl_feats[0].shape[0]
-        query_points = self.init_query_points.weight[None, ...].repeat(B, 1, 1)
-        # query_feat = self.init_query_feat.weight[None, :, :].repeat(B, 1, 1)
-        query_feat = query_points.new_zeros((*query_points.shape[:2], self.embed_dims))
-        #[D B, Q, P, num_classes / 3]
         cls_scores, refine_pts = self.transformer(
-            query_points,
+            init_points,
             query_feat,
             mlvl_feats,
             img_metas=img_metas,
         )
 
-        return dict(depth_pred=depth_pred,
-                    init_points=query_points.unsqueeze(2),
+        return dict(init_points=init_points,
                     all_cls_scores=cls_scores,
                     all_refine_pts=refine_pts)
+
 
     @torch.no_grad()
     def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
@@ -125,9 +116,9 @@ class PointOccHeadDepth3(BaseModule):
 
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
         pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
-        refine_pts_labels = gt_labels[pred_paired_idx]
+        refine_pts_labels = gt_labels[pred_paired_idx] # assign the neareast gt label to each point 
 
-        gt_pts_preds = refine_pts[gt_paired_idx]
+        gt_pts_preds = refine_pts[gt_paired_idx] # get the neareast pts of every gt
         weights = refine_pts.new_ones(gt_pts_preds.shape[0])
         dist = torch.norm(gt_points - gt_pts_preds, dim=-1)
         empty_dist_thr = self.train_cfg.get('empty_dist_thr', 0.2)
@@ -147,15 +138,35 @@ class PointOccHeadDepth3(BaseModule):
         # To instantiate the abstract method
         pass
 
+    @torch.no_grad()
+    def _get_dis_weight(self,pts_list,H=40,W=40,mode='fb'):
+
+        d_max=(H **2 + W **2) ** 0.5
+        pred_pts=torch.cat(pts_list)
+        d=torch.norm(pred_pts[:,:2],2,-1)
+
+        if mode == 'fb':
+            weight= d/d_max + 1
+        elif mode=='fb2':
+            weight= torch.sqrt(d/d_max) + 1
+        elif mode=='fb3':
+            weight=torch.square(d/d_max) + 1
+        elif mode =='fb4':
+            weight= 2 * (d/d_max) + 1
+        elif mode =='fb5':
+            weight= 0.5 * (d/d_max) + 1
+        
+        return weight
+
     def loss_single(self,
                     cls_scores,
                     refine_pts,
                     gt_points_list,
                     gt_masks_list,
                     gt_labels_list):
-        num_imgs = cls_scores.size(0)
-        cls_scores = cls_scores.view(num_imgs, -1, self.num_classes)
-        refine_pts = refine_pts.view(num_imgs, -1, 3)
+        num_imgs = cls_scores.size(0) # B
+        cls_scores = cls_scores.reshape(num_imgs, -1, self.num_classes)
+        refine_pts = refine_pts.reshape(num_imgs, -1, 3)
         refine_pts = decode_points(refine_pts, self.pc_range)
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
@@ -166,12 +177,18 @@ class PointOccHeadDepth3(BaseModule):
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
-            gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
-            pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
+            gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]]) # the neareast pts to gt
+            pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]]) # the neareast gt to pts
         
         cls_scores = torch.cat(cls_scores_list)
         labels = torch.cat(labels_list)
-        loss_cls = self.loss_cls(cls_scores, labels, avg_factor=cls_scores.shape[0])
+        cls_weight=self.cls_weight[None,:].repeat(labels.shape[0],1)
+
+        dis_weight=self._get_dis_weight(pred_paired_pts,mode=self.dis_mode)
+        cls_weight=cls_weight.type_as(cls_scores) * dis_weight.unsqueeze(-1).type_as(cls_scores)
+        
+        cls_weight=cls_weight.type_as(cls_scores)
+        loss_cls = self.loss_cls(cls_scores, labels, cls_weight,avg_factor=cls_scores.shape[0])
         
         gt_pts = torch.cat(gt_points_list)
         gt_weights = torch.cat(gt_weights)
@@ -187,10 +204,10 @@ class PointOccHeadDepth3(BaseModule):
         return loss_cls, loss_pts
     
     @force_fp32(apply_to=('preds_dicts'))
-    def loss(self, depth_map, proj_label, voxel_semantics, mask_camera, preds_dicts):
+    def loss(self, voxel_semantics, mask_camera, preds_dicts):
         # voxelsemantics [B, X200, Y200, Z16] unocuupied=17
         init_points = preds_dicts['init_points']
-        all_cls_scores = preds_dicts['all_cls_scores']
+        all_cls_scores = preds_dicts['all_cls_scores'] # 6 ,B,2k4,32,17
         all_refine_pts = preds_dicts['all_refine_pts']
 
         num_dec_layers = len(all_cls_scores)
@@ -225,19 +242,6 @@ class PointOccHeadDepth3(BaseModule):
             loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
             loss_dict[f'd{num_dec_layer}.loss_pts'] = loss_pts_i
             num_dec_layer += 1
-        
-        # depth and proj label losses
-        depth_pred = preds_dicts['depth_pred']
-        valid_mask = proj_label != 17
-
-        depth = (depth_map[valid_mask] - self.depth_range[0]) / self.depth_range[1]
-        depth = (depth - 0.5) * 2
-        depth_pred = depth_pred.permute(0, 1, 3, 4, 2)[valid_mask]
-        depth_pred = depth_pred.reshape(-1)
-        loss_depth = self.loss_depth(
-            depth_pred, depth, avg_factor=depth_pred.shape[0])
-        loss_dict['loss_depth'] = loss_depth
-        
         return loss_dict
     
     def get_occ(self, pred_dicts, img_metas, rescale=False):
@@ -292,13 +296,13 @@ class PointOccHeadDepth3(BaseModule):
         xx = x[:, None, None].expand(W, H, Z)
         yy = y[None, :, None].expand(W, H, Z)
         zz = z[None, None, :].expand(W, W, Z)
-        coors = torch.stack([xx, yy, zz], dim=-1)
+        coors = torch.stack([xx, yy, zz], dim=-1) # actual space
 
         gt_points, gt_masks, gt_labels = [], [], []
         for i in range(B):
             mask = voxel_semantics[i] != self.empty_label
             gt_points.append(coors[mask])
-            gt_masks.append(mask_camera[i][mask])
+            gt_masks.append(mask_camera[i][mask]) # camera mask and not empty
             gt_labels.append(voxel_semantics[i][mask])
         
         return gt_points, gt_masks, gt_labels
