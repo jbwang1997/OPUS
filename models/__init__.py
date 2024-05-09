@@ -30,6 +30,7 @@ from .pointocc_transformer_point import PointOccTransformerPoint
 from .pointocc_transformer_point2 import PointOccTransformerPoint2
 from .pointocc_transformer_cascade import PointOccTransformerCascade
 from .pointocc_transformer_point_cascade import PointOccTransformerPointCascade
+from .pointocc_transformer_point_cascade2 import PointOccTransformerPointCascade2
 
 __all__ = [
     'SparseBEV', 'SparseBEVHead', 'SparseBEVTransformer', 'PointOccHead',
