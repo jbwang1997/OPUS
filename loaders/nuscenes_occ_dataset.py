@@ -124,7 +124,6 @@ class NuScenesOccDataset(NuScenesDataset):
         from tqdm import tqdm
         for i in tqdm(range(len(occ_results))):
             result_dict = occ_results[i]
-        # for i, result_dict in enumerate(occ_results):
             info = self.get_data_info(i)
             token = info['sample_idx']
             scene_name = info['scene_name']
@@ -141,13 +140,6 @@ class NuScenesOccDataset(NuScenesDataset):
                 result_dict['sem_pred'],
                 dense_shape=occ_labels.shape,
                 empty_value=17)
-            
-            # occ_pred_save = occ_pred.copy()
-            # occ_pred_save[~mask_camera] = 17
-            # occ_labels_save = occ_labels.copy()
-            # occ_labels_save[~mask_camera] = 17
-            # np.savez_compressed(f'pointocc_results/{i}_occ_pred.npz', occ_pred_save)
-            # np.savez_compressed(f'pointocc_results/{i}_occ_label.npz', occ_labels_save)
             
             metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
         

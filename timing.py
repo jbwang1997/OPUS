@@ -17,7 +17,7 @@ from mmdet3d.models import build_model
 def main():
     parser = argparse.ArgumentParser(description='Validate a detector')
     parser.add_argument('--config', required=True)
-    # parser.add_argument('--weights', required=True)
+    parser.add_argument('--weights', required=True)
     parser.add_argument('--num_warmup', default=10)
     parser.add_argument('--samples', default=500)
     parser.add_argument('--log-interval', default=50, help='interval of logging')
@@ -67,11 +67,11 @@ def main():
     assert torch.cuda.device_count() == 1
     model = MMDataParallel(model, [0])
 
-    # logging.info('Loading checkpoint from %s' % args.weights)
-    # load_checkpoint(
-    #     model, args.weights, map_location='cuda', strict=False,
-    #     logger=logging.Logger(__name__, logging.ERROR)
-    # )
+    logging.info('Loading checkpoint from %s' % args.weights)
+    load_checkpoint(
+        model, args.weights, map_location='cuda', strict=False,
+        logger=logging.Logger(__name__, logging.ERROR)
+    )
     model.eval()
 
     pure_inf_time = 0
