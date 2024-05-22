@@ -9,13 +9,13 @@ from mmcv.ops import knn
 from mmdet.models.utils.builder import TRANSFORMER
 from .bbox.utils import decode_bbox, decode_points, encode_points
 from .utils import inverse_sigmoid, DUMP
-from .otr_sampling import sampling_4d
+from .ops_sampling import sampling_4d
 from .checkpoint import checkpoint as cp
 from .csrc.wrapper import MSMV_CUDA
 
 
 @TRANSFORMER.register_module()
-class OTRTransformer(BaseModule):
+class OPSTransformer(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -29,13 +29,13 @@ class OTRTransformer(BaseModule):
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
                             'behavior, init_cfg is not allowed to be set'
-        super(OTRTransformer, self).__init__(init_cfg=init_cfg)
+        super(OPSTransformer, self).__init__(init_cfg=init_cfg)
 
         self.embed_dims = embed_dims
         self.pc_range = pc_range
         self.num_refines = num_refines
 
-        self.decoder = OTRTransformerDecoder(
+        self.decoder = OPSTransformerDecoder(
             embed_dims, num_frames, num_points, num_layers, num_levels,
             num_classes, num_refines, scales, pc_range=pc_range)
 
@@ -53,7 +53,7 @@ class OTRTransformer(BaseModule):
         return cls_scores, refine_pts
 
 
-class OTRTransformerDecoder(BaseModule):
+class OPSTransformerDecoder(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -65,7 +65,7 @@ class OTRTransformerDecoder(BaseModule):
                  scales=[8.0],
                  pc_range=[],
                  init_cfg=None):
-        super(OTRTransformerDecoder, self).__init__(init_cfg)
+        super(OPSTransformerDecoder, self).__init__(init_cfg)
         self.num_layers = num_layers
         self.pc_range = pc_range
 
@@ -81,7 +81,7 @@ class OTRTransformerDecoder(BaseModule):
         self.decoder_layers = ModuleList()
         for i in range(num_layers):
             self.decoder_layers.append(
-                OTRTransformerDecoderLayer(
+                OPSTransformerDecoderLayer(
                     embed_dims, num_frames, num_points, num_levels, num_classes, 
                     num_refines[i], last_refines[i], layer_idx=i, scale=scales[i],
                     pc_range=pc_range)
@@ -129,7 +129,7 @@ class OTRTransformerDecoder(BaseModule):
         return cls_scores, refine_pts
 
 
-class OTRTransformerDecoderLayer(BaseModule):
+class OPSTransformerDecoderLayer(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -144,7 +144,7 @@ class OTRTransformerDecoderLayer(BaseModule):
                  scale=1.0,
                  pc_range=[],
                  init_cfg=None):
-        super(OTRTransformerDecoderLayer, self).__init__(init_cfg)
+        super(OPSTransformerDecoderLayer, self).__init__(init_cfg)
 
         self.embed_dims = embed_dims
         self.num_classes = num_classes
@@ -163,9 +163,9 @@ class OTRTransformerDecoderLayer(BaseModule):
             nn.ReLU(inplace=True),
         )
 
-        self.self_attn = OTRSelfAttention(
+        self.self_attn = OPSSelfAttention(
             embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
-        self.sampling = OTRSampling(embed_dims, num_frames=num_frames, num_groups=4,
+        self.sampling = OPSSampling(embed_dims, num_frames=num_frames, num_groups=4,
                                     num_points=num_points, num_levels=num_levels,
                                     pc_range=pc_range)
         self.mixing = AdaptiveMixing(in_dim=embed_dims, in_points=num_points * num_frames,
@@ -236,7 +236,7 @@ class OTRTransformerDecoderLayer(BaseModule):
         return query_feat, cls_score, refine_pt
 
 
-class OTRSelfAttention(BaseModule):
+class OPSSelfAttention(BaseModule):
     """Scale-adaptive Self Attention"""
     def __init__(self, 
                  embed_dims=256,
@@ -287,7 +287,7 @@ class OTRSelfAttention(BaseModule):
         return -dist
 
 
-class OTRSampling(BaseModule):
+class OPSSampling(BaseModule):
     """Adaptive Spatio-temporal Sampling"""
     def __init__(self,
                  embed_dims=256,

@@ -26,7 +26,7 @@ manual_weight2[15]=2
 
 
 @HEADS.register_module()
-class OTRHead(BaseModule):
+class OPSHead(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,

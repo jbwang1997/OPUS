@@ -58,7 +58,7 @@ img_norm_cfg = dict(
     to_rgb=True)
 
 model = dict(
-    type='OTR',
+    type='OPS',
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
@@ -67,7 +67,7 @@ model = dict(
     img_backbone=img_backbone,
     img_neck=img_neck,
     pts_bbox_head=dict(
-        type='OTRHead',
+        type='OPSHead',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
@@ -75,7 +75,7 @@ model = dict(
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
         transformer=dict(
-            type='OTRTransformer',
+            type='OPSTransformer',
             embed_dims=embed_dims,
             num_frames=num_frames,
             num_points=num_points,
@@ -203,7 +203,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 12
+total_epochs = 100
 batch_size = 8
 
 # load pretrained weights

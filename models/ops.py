@@ -12,7 +12,7 @@ from .utils import GridMask, pad_multiple, GpuPhotoMetricDistortion
 
 
 @DETECTORS.register_module()
-class OTR(MVXTwoStageDetector):
+class OPS(MVXTwoStageDetector):
     def __init__(self,
                  data_aug=None,
                  stop_prev_grad=0,
@@ -30,7 +30,7 @@ class OTR(MVXTwoStageDetector):
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None):
-        super(OTR, self).__init__(pts_voxel_layer, pts_voxel_encoder,
+        super(OPS, self).__init__(pts_voxel_layer, pts_voxel_encoder,
                                   pts_middle_encoder, pts_fusion_layer,
                                   img_backbone, pts_backbone, img_neck, pts_neck,
                                   pts_bbox_head, img_roi_head, img_rpn_head,

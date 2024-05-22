@@ -1,11 +1,11 @@
-# OTR: End-to-End Occupancy Prediction with Transformers
+# OPS: Occupancy Prediction as a Sparse Set
 
 ## Environment
 
-We build OTR based on Pytorch 1.13.1 + CUDA 11.6
+We build OPS based on Pytorch 1.13.1 + CUDA 11.6
 ```
-conda create -n otr python=3.8
-conda activate otr
+conda create -n ops python=3.8
+conda activate ops
 conda install pytorch==1.13.1 torchvision==0.14.1 pytorch-cuda=11.6 -c pytorch -c nvidia
 ```
 
@@ -48,7 +48,7 @@ python setup.py build_ext --inplace
 mim run mmdet3d create_data nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes
 ```
 
-4. Run data preparation code in OTR:
+4. Run data preparation code in OPS:
 
 ```
 python gen_sweep_info.py
@@ -84,16 +84,16 @@ pretrain
 ├── cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth
 ```
 
-Train OTR with a single GPU:
+Train OPS with a single GPU:
 
 ```
-python train.py --config configs/otr-t_r50_704x256_8f_12e.py
+python train.py --config configs/ops-t_r50_704x256_8f_12e.py
 ```
 
-Train OTR with 8 GPUs:
+Train OPS with 8 GPUs:
 
 ```
-bash dist_train.sh 8 configs/otr-t_r50_704x256_8f_12e.py
+bash dist_train.sh 8 configs/ops-t_r50_704x256_8f_12e.py
 ```
 
 The batch size for each GPU will be scaled automatically. So there is no need to modify the `batch_size` in config files.
@@ -104,12 +104,12 @@ Single-GPU evaluation:
 
 ```
 export CUDA_VISIBLE_DEVICES=0
-python val.py --config configs/otr-t_r50_704x256_8f_12e.py --weights path/to/checkpoints
+python val.py --config configs/ops-t_r50_704x256_8f_12e.py --weights path/to/checkpoints
 ```
 
 Multi-GPU evaluation:
 
 ```
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-torchrun --nproc_per_node 8 val.py --config configs/otr-t_r50_704x256_8f_12e.py --weights path/to/checkpoints
+torchrun --nproc_per_node 8 val.py --config configs/ops-t_r50_704x256_8f_12e.py --weights path/to/checkpoints
 ```

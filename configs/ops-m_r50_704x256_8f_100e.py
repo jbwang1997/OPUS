@@ -31,11 +31,11 @@ voxel_size = [0.4, 0.4, 0.4]
 # arch config
 embed_dims = 256
 num_layers = 6
-num_query = 600
+num_query = 2400
 num_frames = 8
 num_levels = 4
-num_points = 4
-num_refines = [1, 4, 16, 32, 64, 128]
+num_points = 2
+num_refines = [1, 2, 4, 8, 16, 32]
 
 img_backbone = dict(
     type='ResNet',
@@ -58,7 +58,7 @@ img_norm_cfg = dict(
     to_rgb=True)
 
 model = dict(
-    type='OTR',
+    type='OPS',
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
@@ -67,7 +67,7 @@ model = dict(
     img_backbone=img_backbone,
     img_neck=img_neck,
     pts_bbox_head=dict(
-        type='OTRHead',
+        type='OPSHead',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
@@ -75,7 +75,7 @@ model = dict(
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
         transformer=dict(
-            type='OTRTransformer',
+            type='OPSTransformer',
             embed_dims=embed_dims,
             num_frames=num_frames,
             num_points=num_points,
@@ -203,7 +203,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 12
+total_epochs = 100
 batch_size = 8
 
 # load pretrained weights
