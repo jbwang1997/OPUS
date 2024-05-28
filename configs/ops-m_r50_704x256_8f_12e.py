@@ -91,13 +91,11 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=2.0),
-        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5),
-        manual_set=True,
-        manual_mode='2',
-        dis_mode='fb',
-        ),
+        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5)),
     train_cfg=dict(
         pts=dict(
+            cls_weights=[
+                10, 5, 10, 5, 5, 10, 10, 5, 10, 5, 5, 1, 5, 1, 1, 2, 1],
             grid_size=[512, 512, 1],
             voxel_size=voxel_size,
             point_cloud_range=point_cloud_range,

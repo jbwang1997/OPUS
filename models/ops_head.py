@@ -1,28 +1,12 @@
-import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from mmcv.runner import force_fp32, BaseModule
 from mmcv.ops import knn, Voxelization
-from mmdet.core import multi_apply, reduce_mean
+from mmdet.core import multi_apply
 from mmdet.models import HEADS
 from mmdet.models.utils import build_transformer
 from mmdet.models.builder import build_loss
-from mmdet3d.core.bbox.coders import build_bbox_coder
-from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
-from .bbox.utils import normalize_bbox, encode_points, decode_points
-from .utils import VERSION
-import numpy as np
-
-manual_list=[11, 16, 15, 14, 13,  4, 10, 12,  3,  9,  7,  1,  0,  5,  8,  6,  2]
-manual_list.reverse()
-manual_weight=np.ones(len(manual_list))
-manual_list_array=np.array(manual_list)
-manual_weight[manual_list_array[:5]]=10
-manual_weight[manual_list_array[5:12]]=5
-
-manual_weight2=manual_weight.copy()
-manual_weight2[15]=2
+from .bbox.utils import decode_points
 
 
 @HEADS.register_module()
@@ -45,9 +29,6 @@ class OPSHead(BaseModule):
                     loss_weight=2.0),
                  loss_pts=dict(type='L1Loss'),
                  init_cfg=None,
-                 manual_set=False,
-                 manual_mode='1',
-                 dis_mode='fb',
                  **kwargs):
         super().__init__(init_cfg)
         self.num_query = num_query
@@ -71,23 +52,11 @@ class OPSHead(BaseModule):
             max_voxels=self.num_query * self.num_refines[-1],
         )
 
-        if manual_set:
-            if manual_mode=='1':
-                self.cls_weight=manual_weight
-            elif manual_mode=='2':
-                self.cls_weight=manual_weight2
-            self.cls_weight=torch.from_numpy(self.cls_weight)
-        else:
-            self.cls_weight=torch.ones(num_classes) # 17
-
-        self.dis_mode=dis_mode
-
         self._init_layers()
 
     def _init_layers(self):
         self.init_points = nn.Embedding(self.num_query, 3)
         nn.init.uniform_(self.init_points.weight, 0, 1)
-        # nn.init.uniform_(self.init_points_offset.weight, -0.1, 0.1)
 
     def init_weights(self):
         self.transformer.init_weights()
@@ -108,55 +77,53 @@ class OPSHead(BaseModule):
                     all_cls_scores=cls_scores,
                     all_refine_pts=refine_pts)
 
+    def get_dis_weight(self, pts):
+        pc_range = pts.new_tensor(self.pc_range)
+        scene_range = pc_range[3:] - pc_range[:3]
+        center = (pc_range[3:] + pc_range[:3]) / 2
+
+        d_max = torch.sqrt(scene_range[0] ** 2 + scene_range[1] ** 2)
+        dist = (pts - center[None, ...])[:, :2]
+        dist = torch.norm(dist, dim=-1, keepdim=True)
+        return dist / d_max + 1
 
     @torch.no_grad()
     def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
+        # knn to apply Chamfer distance
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
-
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
         pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
-        refine_pts_labels = gt_labels[pred_paired_idx] # assign the neareast gt label to each point 
+        gt_paired_pts = refine_pts[gt_paired_idx]
+        pred_paired_pts = gt_points[pred_paired_idx]
 
-        gt_pts_preds = refine_pts[gt_paired_idx] # get the neareast pts of every gt
-        weights = refine_pts.new_ones(gt_pts_preds.shape[0])
-        dist = torch.norm(gt_points - gt_pts_preds, dim=-1)
+        # cls assignment
+        refine_pts_labels = gt_labels[pred_paired_idx]
+        cls_weights = self.train_cfg.get('cls_weights', [1] * self.num_classes)
+        cls_weights = refine_pts.new_tensor([cls_weights]) * \
+            self.get_dis_weight(pred_paired_pts)
+
+        # reg assignment
         empty_dist_thr = self.train_cfg.get('empty_dist_thr', 0.2)
         empty_weights = self.train_cfg.get('empty_weights', 5)
+
+        gt_pts_weights = refine_pts.new_ones(gt_paired_pts.shape[0])
+        dist = torch.norm(gt_points - gt_paired_pts, dim=-1)
         mask = (dist > empty_dist_thr) & gt_masks
-        weights[mask] = empty_weights
+        gt_pts_weights[mask] = empty_weights
 
         rare_classes = self.train_cfg.get('rare_classes', [0, 2, 5, 8])
         rare_weights = self.train_cfg.get('rare_weights', 10)
         for cls_idx in rare_classes:
             mask = (gt_labels == cls_idx) & gt_masks
-            weights[mask] = weights[mask].clamp(min=rare_weights)
+            gt_pts_weights[mask] = gt_pts_weights[mask].clamp(min=rare_weights)
 
-        return refine_pts_labels, weights, gt_paired_idx, pred_paired_idx
+        return (refine_pts_labels, gt_paired_idx, pred_paired_idx, cls_weights, 
+                gt_pts_weights)
     
     def get_targets(self):
         # To instantiate the abstract method
         pass
-
-    @torch.no_grad()
-    def _get_dis_weight(self,pts_list,H=40,W=40,mode='fb'):
-
-        d_max=(H **2 + W **2) ** 0.5
-        pred_pts=torch.cat(pts_list)
-        d=torch.norm(pred_pts[:,:2],2,-1)
-
-        if mode == 'fb':
-            weight= d/d_max + 1
-        elif mode=='fb2':
-            weight= torch.sqrt(d/d_max) + 1
-        elif mode=='fb3':
-            weight=torch.square(d/d_max) + 1
-        elif mode =='fb4':
-            weight= 2 * (d/d_max) + 1
-        elif mode =='fb5':
-            weight= 0.5 * (d/d_max) + 1
-        
-        return weight
 
     def loss_single(self,
                     cls_scores,
@@ -171,35 +138,40 @@ class OPSHead(BaseModule):
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
-        (labels_list, gt_weights, gt_paired_idx_list, pred_paired_idx_list) = \
-            multi_apply(self._get_target_single, refine_pts_list, gt_points_list, 
-                        gt_masks_list, gt_labels_list)
+        (labels_list, gt_paired_idx_list, pred_paired_idx_list, cls_weights,
+         gt_pts_weights) = multi_apply(
+             self._get_target_single, refine_pts_list, gt_points_list, 
+             gt_masks_list, gt_labels_list)
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
-            gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]]) # the neareast pts to gt
-            pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]]) # the neareast gt to pts
-        
+            gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
+            pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
+
+        # concatenate all results from different samples
         cls_scores = torch.cat(cls_scores_list)
         labels = torch.cat(labels_list)
-        cls_weight=self.cls_weight[None,:].repeat(labels.shape[0],1)
-
-        dis_weight=self._get_dis_weight(pred_paired_pts,mode=self.dis_mode)
-        cls_weight=cls_weight.type_as(cls_scores) * dis_weight.unsqueeze(-1).type_as(cls_scores)
-        
-        cls_weight=cls_weight.type_as(cls_scores)
-        loss_cls = self.loss_cls(cls_scores, labels, cls_weight,avg_factor=cls_scores.shape[0])
-        
+        cls_weights = torch.cat(cls_weights)
         gt_pts = torch.cat(gt_points_list)
-        gt_weights = torch.cat(gt_weights)
         gt_paired_pts = torch.cat(gt_paired_pts)
+        gt_pts_weights = torch.cat(gt_pts_weights)
         pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
 
+        # calculate loss cls
+        loss_cls = self.loss_cls(cls_scores,
+                                 labels,
+                                 weight=cls_weights,
+                                 avg_factor=cls_scores.shape[0])
+        # calculate loss pts
         loss_pts = pred_pts.new_tensor(0)
-        loss_pts += self.loss_pts(
-            gt_pts, gt_paired_pts, weight=gt_weights[..., None], avg_factor=gt_pts.shape[0])
-        loss_pts += self.loss_pts(pred_pts, pred_paired_pts, avg_factor=pred_pts.shape[0])
+        loss_pts += self.loss_pts(gt_pts,
+                                  gt_paired_pts,
+                                  weight=gt_pts_weights[..., None],
+                                  avg_factor=gt_pts.shape[0])
+        loss_pts += self.loss_pts(pred_pts, 
+                                  pred_paired_pts,
+                                  avg_factor=pred_pts.shape[0])
 
         return loss_cls, loss_pts
     
