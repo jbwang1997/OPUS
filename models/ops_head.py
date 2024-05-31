@@ -34,8 +34,6 @@ class OPSHead(BaseModule):
         self.num_query = num_query
         self.num_classes = num_classes
         self.in_channels = in_channels
-        self.pc_range = pc_range
-        self.voxel_size = voxel_size
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.fp16_enabled = False
@@ -46,11 +44,22 @@ class OPSHead(BaseModule):
         self.num_refines = self.transformer.num_refines
         self.embed_dims = self.transformer.embed_dims
         self.voxel_generator = Voxelization(
-            voxel_size=self.voxel_size,
-            point_cloud_range=self.pc_range,
+            voxel_size=voxel_size,
+            point_cloud_range=pc_range,
             max_num_points=10, 
             max_voxels=self.num_query * self.num_refines[-1],
+            deterministic=False
         )
+
+        # prepare scene
+        pc_range = torch.tensor(pc_range)
+        scene_size = pc_range[3:] - pc_range[:3]
+        voxel_size = torch.tensor(voxel_size)
+        voxel_num = (scene_size / voxel_size).long()
+        self.register_buffer('pc_range', pc_range)
+        self.register_buffer('scene_size', scene_size)
+        self.register_buffer('voxel_size', voxel_size)
+        self.register_buffer('voxel_num', voxel_num)
 
         self._init_layers()
 
@@ -78,17 +87,28 @@ class OPSHead(BaseModule):
                     all_refine_pts=refine_pts)
 
     def get_dis_weight(self, pts):
-        pc_range = pts.new_tensor(self.pc_range)
-        scene_range = pc_range[3:] - pc_range[:3]
-        center = (pc_range[3:] + pc_range[:3]) / 2
-
-        d_max = torch.sqrt(scene_range[0] ** 2 + scene_range[1] ** 2)
-        dist = (pts - center[None, ...])[:, :2]
-        dist = torch.norm(dist, dim=-1, keepdim=True)
-        return dist / d_max + 1
+        max_dist = torch.sqrt(
+            self.scene_size[0] ** 2 + self.scene_size[1] ** 2)
+        centers = (self.pc_range[:3] + self.pc_range[3:]) / 2
+        dist = (pts - centers[None, ...])[..., :2]
+        dist = torch.norm(dist, dim=-1)
+        return dist / max_dist + 1
+    
+    def voxelize(self, pts, clip=True):
+        loc = ((pts - self.pc_range[:3]) / self.voxel_size).long()
+        if clip:
+            loc[..., 0] = loc[..., 0].clamp(0, self.voxel_num[0] - 1)
+            loc[..., 1] = loc[..., 1].clamp(0, self.voxel_num[1] - 1)
+            loc[..., 2] = loc[..., 2].clamp(0, self.voxel_num[2] - 1)
+        return loc
 
     @torch.no_grad()
-    def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
+    def _get_target_single(self,
+                           refine_pts,
+                           gt_points,
+                           gt_masks,
+                           gt_labels,
+                           mask_camera):
         # knn to apply Chamfer distance
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
@@ -100,26 +120,36 @@ class OPSHead(BaseModule):
         # cls assignment
         refine_pts_labels = gt_labels[pred_paired_idx]
         cls_weights = self.train_cfg.get('cls_weights', [1] * self.num_classes)
-        cls_weights = refine_pts.new_tensor([cls_weights]) * \
-            self.get_dis_weight(pred_paired_pts)
+        cls_weights = refine_pts.new_tensor(cls_weights)
+        label_weights = cls_weights * \
+            self.get_dis_weight(pred_paired_pts)[..., None]
 
-        # reg assignment
-        empty_dist_thr = self.train_cfg.get('empty_dist_thr', 0.2)
-        empty_weights = self.train_cfg.get('empty_weights', 5)
+        # gt side assignment
+        empty_dist_thr1 = self.train_cfg.get('empty_dist_thr1', 0.2)
+        empty_weights1 = self.train_cfg.get('empty_weights1', 5)
 
         gt_pts_weights = refine_pts.new_ones(gt_paired_pts.shape[0])
         dist = torch.norm(gt_points - gt_paired_pts, dim=-1)
-        mask = (dist > empty_dist_thr) & gt_masks
-        gt_pts_weights[mask] = empty_weights
+        mask = (dist > empty_dist_thr1) & gt_masks
+        gt_pts_weights[mask] = empty_weights1
 
-        rare_classes = self.train_cfg.get('rare_classes', [0, 2, 5, 8])
-        rare_weights = self.train_cfg.get('rare_weights', 10)
-        for cls_idx in rare_classes:
-            mask = (gt_labels == cls_idx) & gt_masks
-            gt_pts_weights[mask] = gt_pts_weights[mask].clamp(min=rare_weights)
+        pts_cls_weights = cls_weights[gt_labels]
+        pts_cls_weights[~gt_masks] = 1
+        gt_pts_weights = torch.maximum(gt_pts_weights, pts_cls_weights)
 
-        return (refine_pts_labels, gt_paired_idx, pred_paired_idx, cls_weights, 
-                gt_pts_weights)
+        # pred side assignment
+        empty_dist_thr2 = self.train_cfg.get('empty_dist_thr2', 0.2)
+        empty_weights2 = self.train_cfg.get('empty_weights2', 3)
+        x, y, z = self.voxelize(refine_pts).unbind(dim=-1)
+        pred_masks = mask_camera[x, y, z]
+
+        pred_pts_weights = refine_pts.new_ones(pred_paired_pts.shape[0])
+        dist = torch.norm(refine_pts - pred_paired_pts, dim=-1)
+        mask = (dist > empty_dist_thr2) & pred_masks
+        pred_pts_weights[mask] = empty_weights2
+
+        return (refine_pts_labels, gt_paired_idx, pred_paired_idx, label_weights, 
+                gt_pts_weights, pred_pts_weights)
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -130,7 +160,8 @@ class OPSHead(BaseModule):
                     refine_pts,
                     gt_points_list,
                     gt_masks_list,
-                    gt_labels_list):
+                    gt_labels_list,
+                    mask_camera):
         num_imgs = cls_scores.size(0) # B
         cls_scores = cls_scores.reshape(num_imgs, -1, self.num_classes)
         refine_pts = refine_pts.reshape(num_imgs, -1, 3)
@@ -139,9 +170,9 @@ class OPSHead(BaseModule):
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
         (labels_list, gt_paired_idx_list, pred_paired_idx_list, cls_weights,
-         gt_pts_weights) = multi_apply(
+         gt_pts_weights, pred_pts_weights) = multi_apply(
              self._get_target_single, refine_pts_list, gt_points_list, 
-             gt_masks_list, gt_labels_list)
+             gt_masks_list, gt_labels_list, mask_camera)
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
@@ -157,6 +188,7 @@ class OPSHead(BaseModule):
         gt_pts_weights = torch.cat(gt_pts_weights)
         pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
+        pred_pts_weights = torch.cat(pred_pts_weights)
 
         # calculate loss cls
         loss_cls = self.loss_cls(cls_scores,
@@ -171,6 +203,7 @@ class OPSHead(BaseModule):
                                   avg_factor=gt_pts.shape[0])
         loss_pts += self.loss_pts(pred_pts, 
                                   pred_paired_pts,
+                                  weight=pred_pts_weights[..., None],
                                   avg_factor=pred_pts.shape[0])
 
         return loss_cls, loss_pts
@@ -188,10 +221,12 @@ class OPSHead(BaseModule):
         all_gt_points_list = [gt_points_list for _ in range(num_dec_layers)]
         all_gt_masks_list = [gt_masks_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
+        all_mask_camera = [mask_camera for _ in range(num_dec_layers)]
 
         losses_cls, losses_pts = multi_apply(
             self.loss_single, all_cls_scores, all_refine_pts, 
-            all_gt_points_list, all_gt_masks_list, all_gt_labels_list
+            all_gt_points_list, all_gt_masks_list, all_gt_labels_list,
+            all_mask_camera
         )
 
         loss_dict = dict()
@@ -201,7 +236,7 @@ class OPSHead(BaseModule):
                 *init_points.shape[:-1], self.num_classes)
             _, init_loss_pts = self.loss_single(
                 pseudo_scores, init_points, gt_points_list, 
-                gt_masks_list, gt_labels_list)
+                gt_masks_list, gt_labels_list, mask_camera)
             loss_dict['init_loss_pts'] = init_loss_pts
 
         # loss from the last decoder layer
@@ -255,15 +290,13 @@ class OPSHead(BaseModule):
         B, W, H, Z = voxel_semantics.shape
         device = voxel_semantics.device
         voxel_semantics = voxel_semantics.long()
-        pc_range = torch.tensor(self.pc_range, device=device).float()
-        scene_size = pc_range[3:] - pc_range[:3]
 
         x = torch.arange(0, W, dtype=torch.float32, device=device)
-        x = (x + 0.5) / W * scene_size[0] + pc_range[0]
+        x = (x + 0.5) / W * self.scene_size[0] + self.pc_range[0]
         y = torch.arange(0, H, dtype=torch.float32, device=device)
-        y = (y + 0.5) / H * scene_size[1] + pc_range[1]
+        y = (y + 0.5) / H * self.scene_size[1] + self.pc_range[1]
         z = torch.arange(0, Z, dtype=torch.float32, device=device)
-        z = (z + 0.5) / Z * scene_size[2] + pc_range[2]
+        z = (z + 0.5) / Z * self.scene_size[2] + self.pc_range[2]
 
         xx = x[:, None, None].expand(W, H, Z)
         yy = y[None, :, None].expand(W, H, Z)
