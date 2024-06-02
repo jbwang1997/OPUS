@@ -259,27 +259,35 @@ class OPSHead(BaseModule):
 
         batch_size = refine_pts.shape[0]
         pc_range = refine_pts.new_tensor(self.pc_range)
-        voxel_size = refine_pts.new_tensor(self.voxel_size)
+        ctr_dist_thr = self.test_cfg.get('ctr_dist_thr', 3.)
+        score_thr = self.test_cfg.get('score_thr', 0.)
         result_list = []
         for i in range(batch_size):
             refine_pts, cls_scores = refine_pts[i], cls_scores[i]
-            refine_pts = refine_pts.flatten(0, 1)
-            cls_scores = cls_scores.flatten(0, 1)
-
             refine_pts = decode_points(refine_pts, self.pc_range)
-            pts = torch.cat([refine_pts, cls_scores], dim=-1)
+
+            # filter weak points by distance and score
+            centers = refine_pts.mean(dim=1, keepdim=True)
+            ctr_dists = torch.norm(refine_pts - centers, dim=-1)
+            mask_dist = ctr_dists < ctr_dist_thr
+            mask_score = (cls_scores > score_thr).any(dim=-1)
+            mask = mask_dist & mask_score
+            refine_pts = refine_pts[mask]
+            cls_scores = cls_scores[mask]
+
+            # distance weight
+            ctr_dists = ctr_dists[mask][..., None]
+            dist_weights = torch.exp(ctr_dist_thr - ctr_dists)
+
+            pts = torch.cat([refine_pts, cls_scores, dist_weights], dim=-1)
             pts_infos, voxels, num_pts = self.voxel_generator(pts)
             voxels = torch.flip(voxels, [1])
 
-            pts, scores = pts_infos[..., :3], pts_infos[..., 3:]
-            scores = scores.sum(dim=1) / num_pts[..., None]
+            pts, scores, dist_weights = \
+                pts_infos[..., :3], pts_infos[..., 3:-1], pts_infos[..., -1:]
+            scores = (scores * dist_weights).sum(dim=1) / dist_weights.sum(dim=1)
             scores, labels = scores.max(dim=-1)
 
-            if self.test_cfg.get('score_thr', 0) != 0:
-                score_thr = self.test_cfg.get('score_thr', 0)
-                voxels = voxels[scores > score_thr]
-                labels = labels[scores > score_thr]
-            
             result_list.append(dict(
                 sem_pred=labels.detach().cpu().numpy(),
                 occ_loc=voxels.detach().cpu().numpy()))

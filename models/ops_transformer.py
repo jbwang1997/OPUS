@@ -24,12 +24,12 @@ class OPSTransformer(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=[1, 2, 4, 8, 16, 32],
-                 scales=[8.0],
+                 scales=[2.0],
                  pc_range=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
                             'behavior, init_cfg is not allowed to be set'
-        super(OPSTransformer, self).__init__(init_cfg=init_cfg)
+        super().__init__(init_cfg=init_cfg)
 
         self.embed_dims = embed_dims
         self.pc_range = pc_range
@@ -62,7 +62,7 @@ class OPSTransformerDecoder(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
-                 scales=[8.0],
+                 scales=[2.0],
                  pc_range=[],
                  init_cfg=None):
         super(OPSTransformerDecoder, self).__init__(init_cfg)
@@ -141,7 +141,7 @@ class OPSTransformerDecoderLayer(BaseModule):
                  num_cls_fcs=2,
                  num_reg_fcs=2,
                  layer_idx=0,
-                 scale=1.0,
+                 scale=2.0,
                  pc_range=[],
                  init_cfg=None):
         super(OPSTransformerDecoderLayer, self).__init__(init_cfg)
@@ -153,6 +153,7 @@ class OPSTransformerDecoderLayer(BaseModule):
         self.num_refines = num_refines
         self.last_refines = last_refines
         self.layer_idx = layer_idx
+        self.scale = scale
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3 * self.last_refines, self.embed_dims), 
@@ -192,8 +193,6 @@ class OPSTransformerDecoderLayer(BaseModule):
         reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_refines))
         self.reg_branch = nn.Sequential(*reg_branch)
 
-        self.scale = Scale(scale)
-
     @torch.no_grad()
     def init_weights(self):
         self.self_attn.init_weights()
@@ -226,7 +225,7 @@ class OPSTransformerDecoderLayer(BaseModule):
 
         B, Q = query_points.shape[:2]
         cls_score = self.cls_branch(query_feat)  # [B, Q, P * num_classes]
-        reg_offset = self.scale(self.reg_branch(query_feat))  # [B, Q, P * 3]
+        reg_offset = self.scale * self.reg_branch(query_feat)  # [B, Q, P * 3]
         cls_score = cls_score.reshape(B, Q, self.num_refines, self.num_classes)
         refine_pt = self.refine_points(query_points, reg_offset)
 

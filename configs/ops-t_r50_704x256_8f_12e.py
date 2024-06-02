@@ -83,7 +83,7 @@ model = dict(
             num_levels=num_levels,
             num_classes=len(occ_names),
             num_refines=num_refines,
-            scales=[16.0],
+            scales=[2.0],
             pc_range=point_cloud_range),
         loss_cls=dict(
             type='FocalLoss',
@@ -102,7 +102,7 @@ model = dict(
             out_size_factor=4)
         ),
     test_cfg=dict(
-        pts=dict(score_thr=0.)
+        pts=dict(score_thr=0.4)
     )
 )
 
