@@ -102,7 +102,7 @@ model = dict(
             out_size_factor=4)
         ),
     test_cfg=dict(
-        pts=dict(score_thr=0.)
+        pts=dict(score_thr=0.4)
     )
 )
 
