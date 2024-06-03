@@ -279,6 +279,23 @@ class OPSHead(BaseModule):
             ctr_dists = ctr_dists[mask][..., None]
             dist_weights = torch.exp(ctr_dist_thr - ctr_dists)
 
+            if self.test_cfg.get('padding', True):
+                discrete_pts = self.discretize(refine_pts, clip=False, decode=True)
+                bias = refine_pts - discrete_pts
+                padding_pts, padding_scores, padding_dist_weights = \
+                    [refine_pts], [cls_scores], [dist_weights]
+                for dim in [0, 1, 2]:
+                    mask = bias[..., dim].abs() > self.test_cfg.get('padding_thr', 0.15)
+                    _pts = discrete_pts[mask]
+                    _pts[..., dim] += torch.sign(bias[mask, dim]) * self.voxel_size[dim]
+                    padding_pts.append(_pts)
+                    padding_scores.append(cls_scores[mask])
+                    padding_dist_weights.append(dist_weights[mask])
+                
+                refine_pts = torch.cat(padding_pts, dim=0)
+                cls_scores = torch.cat(padding_scores, dim=0)
+                dist_weights = torch.cat(padding_dist_weights, dim=0)
+            
             pts = torch.cat([refine_pts, cls_scores, dist_weights], dim=-1)
             pts_infos, voxels, num_pts = self.voxel_generator(pts)
             voxels = torch.flip(voxels, [1])
