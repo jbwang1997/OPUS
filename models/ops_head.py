@@ -94,13 +94,15 @@ class OPSHead(BaseModule):
         dist = torch.norm(dist, dim=-1)
         return dist / max_dist + 1
     
-    def voxelize(self, pts, clip=True):
-        loc = ((pts - self.pc_range[:3]) / self.voxel_size).long()
+    def discretize(self, pts, clip=True, decode=False):
+        loc = torch.floor((pts - self.pc_range[:3]) / self.voxel_size)
         if clip:
             loc[..., 0] = loc[..., 0].clamp(0, self.voxel_num[0] - 1)
             loc[..., 1] = loc[..., 1].clamp(0, self.voxel_num[1] - 1)
             loc[..., 2] = loc[..., 2].clamp(0, self.voxel_num[2] - 1)
-        return loc
+
+        return loc.long() if not decode else \
+            (loc + 0.5) * self.voxel_size + self.pc_range[:3]
 
     @torch.no_grad()
     def _get_target_single(self,
@@ -140,7 +142,7 @@ class OPSHead(BaseModule):
         # pred side assignment
         empty_dist_thr2 = self.train_cfg.get('empty_dist_thr2', 0.2)
         empty_weights2 = self.train_cfg.get('empty_weights2', 3)
-        x, y, z = self.voxelize(refine_pts).unbind(dim=-1)
+        x, y, z = self.discretize(refine_pts).unbind(dim=-1)
         pred_masks = mask_camera[x, y, z]
 
         pred_pts_weights = refine_pts.new_ones(pred_paired_pts.shape[0])
