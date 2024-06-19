@@ -14,6 +14,7 @@ from .utils import GridMask, pad_multiple, GpuPhotoMetricDistortion
 @DETECTORS.register_module()
 class OPS(MVXTwoStageDetector):
     def __init__(self,
+                 use_grid_mask=True,
                  data_aug=None,
                  stop_prev_grad=0,
                  pts_voxel_layer=None,
@@ -39,7 +40,7 @@ class OPS(MVXTwoStageDetector):
         self.stop_prev_grad = stop_prev_grad
         self.color_aug = GpuPhotoMetricDistortion()
         self.grid_mask = GridMask(ratio=0.5, prob=0.7)
-        self.use_grid_mask = True
+        self.use_grid_mask = use_grid_mask
 
         self.memory = {}
         self.queue = queue.Queue()

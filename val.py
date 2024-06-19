@@ -130,7 +130,7 @@ def main():
         VERSION.name = checkpoint['version']
 
     if world_size > 1:
-        results = multi_gpu_test(model, val_loader, gpu_collect=True)
+        results = multi_gpu_test(model, val_loader, gpu_collect=False)
     else:
         results = single_gpu_test(model, val_loader)
 

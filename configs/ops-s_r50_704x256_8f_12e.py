@@ -96,13 +96,13 @@ model = dict(
         pts=dict(
             cls_weights=[
                 10, 5, 10, 5, 5, 10, 10, 5, 10, 5, 5, 1, 5, 1, 1, 2, 1],
-            grid_size=[512, 512, 1],
-            voxel_size=voxel_size,
-            point_cloud_range=point_cloud_range,
-            out_size_factor=4)
+            )
         ),
     test_cfg=dict(
-        pts=dict(score_thr=0.4)
+        pts=dict(
+            score_thr=0.5,
+            padding=True
+        )
     )
 )
 

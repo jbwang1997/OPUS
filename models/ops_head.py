@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.runner import force_fp32, BaseModule
 from mmcv.ops import knn, Voxelization
 from mmdet.core import multi_apply
@@ -135,23 +136,14 @@ class OPSHead(BaseModule):
         mask = (dist > empty_dist_thr1) & gt_masks
         gt_pts_weights[mask] = empty_weights1
 
-        pts_cls_weights = cls_weights[gt_labels]
-        pts_cls_weights[~gt_masks] = 1
-        gt_pts_weights = torch.maximum(gt_pts_weights, pts_cls_weights)
-
-        # pred side assignment
-        empty_dist_thr2 = self.train_cfg.get('empty_dist_thr2', 0.2)
-        empty_weights2 = self.train_cfg.get('empty_weights2', 3)
-        x, y, z = self.discretize(refine_pts).unbind(dim=-1)
-        pred_masks = mask_camera[x, y, z]
-
-        pred_pts_weights = refine_pts.new_ones(pred_paired_pts.shape[0])
-        dist = torch.norm(refine_pts - pred_paired_pts, dim=-1)
-        mask = (dist > empty_dist_thr2) & pred_masks
-        pred_pts_weights[mask] = empty_weights2
+        rare_classes = self.train_cfg.get('rare_classes', [0, 2, 5, 8])
+        rare_weights = self.train_cfg.get('rare_weights', 10)
+        for cls_idx in rare_classes:
+            mask = (gt_labels == cls_idx) & gt_masks
+            gt_pts_weights[mask] = gt_pts_weights[mask].clamp(min=rare_weights)
 
         return (refine_pts_labels, gt_paired_idx, pred_paired_idx, label_weights, 
-                gt_pts_weights, pred_pts_weights)
+                gt_pts_weights)
     
     def get_targets(self):
         # To instantiate the abstract method
@@ -172,7 +164,7 @@ class OPSHead(BaseModule):
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
         (labels_list, gt_paired_idx_list, pred_paired_idx_list, cls_weights,
-         gt_pts_weights, pred_pts_weights) = multi_apply(
+         gt_pts_weights) = multi_apply(
              self._get_target_single, refine_pts_list, gt_points_list, 
              gt_masks_list, gt_labels_list, mask_camera)
         
@@ -190,7 +182,6 @@ class OPSHead(BaseModule):
         gt_pts_weights = torch.cat(gt_pts_weights)
         pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
-        pred_pts_weights = torch.cat(pred_pts_weights)
 
         # calculate loss cls
         loss_cls = self.loss_cls(cls_scores,
@@ -205,7 +196,6 @@ class OPSHead(BaseModule):
                                   avg_factor=gt_pts.shape[0])
         loss_pts += self.loss_pts(pred_pts, 
                                   pred_paired_pts,
-                                  weight=pred_pts_weights[..., None],
                                   avg_factor=pred_pts.shape[0])
 
         return loss_cls, loss_pts
@@ -260,9 +250,9 @@ class OPSHead(BaseModule):
         refine_pts = all_refine_pts[-1]
 
         batch_size = refine_pts.shape[0]
-        pc_range = refine_pts.new_tensor(self.pc_range)
         ctr_dist_thr = self.test_cfg.get('ctr_dist_thr', 3.)
         score_thr = self.test_cfg.get('score_thr', 0.)
+
         result_list = []
         for i in range(batch_size):
             refine_pts, cls_scores = refine_pts[i], cls_scores[i]
@@ -277,36 +267,30 @@ class OPSHead(BaseModule):
             refine_pts = refine_pts[mask]
             cls_scores = cls_scores[mask]
 
-            # distance weight
-            ctr_dists = ctr_dists[mask][..., None]
-            dist_weights = torch.exp(ctr_dist_thr - ctr_dists)
+            pts = torch.cat([refine_pts, cls_scores], dim=-1)
+            pts_infos, voxels, num_pts = self.voxel_generator(pts)
+            voxels = torch.flip(voxels, [1]).long()
+            pts, scores = pts_infos[..., :3], pts_infos[..., 3:]
+            scores = scores.sum(dim=1) / num_pts[..., None]
 
             if self.test_cfg.get('padding', True):
-                discrete_pts = self.discretize(refine_pts, clip=False, decode=True)
-                bias = refine_pts - discrete_pts
-                padding_pts, padding_scores, padding_dist_weights = \
-                    [refine_pts], [cls_scores], [dist_weights]
-                for dim in [0, 1, 2]:
-                    mask = bias[..., dim].abs() > self.test_cfg.get('padding_thr', 0.15)
-                    _pts = discrete_pts[mask]
-                    _pts[..., dim] += torch.sign(bias[mask, dim]) * self.voxel_size[dim]
-                    padding_pts.append(_pts)
-                    padding_scores.append(cls_scores[mask])
-                    padding_dist_weights.append(dist_weights[mask])
-                
-                refine_pts = torch.cat(padding_pts, dim=0)
-                cls_scores = torch.cat(padding_scores, dim=0)
-                dist_weights = torch.cat(padding_dist_weights, dim=0)
-            
-            pts = torch.cat([refine_pts, cls_scores, dist_weights], dim=-1)
-            pts_infos, voxels, num_pts = self.voxel_generator(pts)
-            voxels = torch.flip(voxels, [1])
+                occ = scores.new_zeros((self.voxel_num[0], self.voxel_num[1], 
+                                        self.voxel_num[2], self.num_classes))
+                occ[voxels[:, 0], voxels[:, 1], voxels[:, 2]] = scores
+                occ = occ.permute(3, 0, 1, 2).unsqueeze(0)
+                # padding
+                dilated_occ = F.max_pool3d(occ, 3, stride=1, padding=1)
+                eroded_occ = -F.max_pool3d(-dilated_occ, 3, stride=1, padding=1)
+                # repalce with original occ prediction
+                original_mask = (occ > score_thr).any(dim=1, keepdim=True)
+                original_mask = original_mask.expand_as(eroded_occ)
+                eroded_occ[original_mask] = occ[original_mask]
+                # sparse dense occ
+                eroded_occ = eroded_occ.squeeze(0).permute(1, 2, 3, 0)
+                voxels = torch.nonzero((eroded_occ > score_thr).any(dim=-1))
+                scores = eroded_occ[voxels[:, 0], voxels[:, 1], voxels[:, 2], :]
 
-            pts, scores, dist_weights = \
-                pts_infos[..., :3], pts_infos[..., 3:-1], pts_infos[..., -1:]
-            scores = (scores * dist_weights).sum(dim=1) / dist_weights.sum(dim=1)
-            scores, labels = scores.max(dim=-1)
-
+            labels = scores.argmax(dim=-1)
             result_list.append(dict(
                 sem_pred=labels.detach().cpu().numpy(),
                 occ_loc=voxels.detach().cpu().numpy()))
