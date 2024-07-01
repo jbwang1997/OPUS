@@ -59,6 +59,7 @@ img_norm_cfg = dict(
 
 model = dict(
     type='OPS',
+    use_grid_mask=False,
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
@@ -83,7 +84,7 @@ model = dict(
             num_levels=num_levels,
             num_classes=len(occ_names),
             num_refines=num_refines,
-            scales=[2.0],
+            scales=[1.0],
             pc_range=point_cloud_range),
         loss_cls=dict(
             type='FocalLoss',

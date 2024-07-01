@@ -20,11 +20,11 @@ class NuScenesOccDataset(NuScenesDataset):
         super().__init__(filter_empty_gt=False, *args, **kwargs)
         self.data_infos = self.load_annotations(self.ann_file)
     
-    def collect_sweeps(self, index, into_past=150, into_future=0):
+    def collect_cam_sweeps(self, index, into_past=150, into_future=0):
         all_sweeps_prev = []
         curr_index = index
         while len(all_sweeps_prev) < into_past:
-            curr_sweeps = self.data_infos[curr_index]['sweeps']
+            curr_sweeps = self.data_infos[curr_index]['cam_sweeps']
             if len(curr_sweeps) == 0:
                 break
             all_sweeps_prev.extend(curr_sweeps)
@@ -36,16 +36,40 @@ class NuScenesOccDataset(NuScenesDataset):
         while len(all_sweeps_next) < into_future:
             if curr_index >= len(self.data_infos):
                 break
-            curr_sweeps = self.data_infos[curr_index]['sweeps']
+            curr_sweeps = self.data_infos[curr_index]['cam_sweeps']
             all_sweeps_next.extend(curr_sweeps[::-1])
             all_sweeps_next.append(self.data_infos[curr_index]['cams'])
             curr_index = curr_index + 1
 
         return all_sweeps_prev, all_sweeps_next
 
+    def collect_lidar_sweeps(self, index, into_past=20, into_future=0):
+        all_sweeps_prev = []
+        curr_index = index
+        while len(all_sweeps_prev) < into_past:
+            curr_sweeps = self.data_infos[curr_index]['lidar_sweeps']
+            if len(curr_sweeps) == 0:
+                break
+            all_sweeps_prev.extend(curr_sweeps)
+            curr_index = curr_index - 1
+        
+        all_sweeps_next = []
+        curr_index = index + 1
+        last_timestamp = self.data_infos[index]['timestamp']
+        while len(all_sweeps_next) < into_future:
+            if curr_index >= len(self.data_infos):
+                break
+            curr_sweeps = self.data_infos[curr_index]['lidar_sweeps'][::-1]
+            if curr_sweeps[0]['timestamp'] == last_timestamp:
+                curr_sweeps = curr_sweeps[1:]
+            all_sweeps_next.extend(curr_sweeps)
+            curr_index = curr_index + 1
+            last_timestamp = all_sweeps_next[-1]['timestamp']
+
+        return all_sweeps_prev, all_sweeps_next
+
     def get_data_info(self, index):
         info = self.data_infos[index]
-        sweeps_prev, sweeps_next = self.collect_sweeps(index)
 
         ego2global_translation = info['ego2global_translation']
         ego2global_rotation = info['ego2global_rotation']
@@ -53,22 +77,26 @@ class NuScenesOccDataset(NuScenesDataset):
         lidar2ego_rotation = info['lidar2ego_rotation']
         ego2global_rotation_mat = Quaternion(ego2global_rotation).rotation_matrix
         lidar2ego_rotation_mat = Quaternion(lidar2ego_rotation).rotation_matrix
+        ego2lidar = transform_matrix(
+            lidar2ego_translation, Quaternion(lidar2ego_rotation), inverse=True)
 
         input_dict = dict(
-            pts_filename=info['lidar_path'],
             sample_idx=info['token'],
             scene_name=info['scene_name'],
-            sweeps={'prev': sweeps_prev, 'next': sweeps_next},
             timestamp=info['timestamp'] / 1e6,
+            ego2lidar=ego2lidar,
             ego2global_translation=ego2global_translation,
             ego2global_rotation=ego2global_rotation_mat,
             lidar2ego_translation=lidar2ego_translation,
             lidar2ego_rotation=lidar2ego_rotation_mat,
         )
 
-        # load ego2lidar for occ
-        ego2lidar = transform_matrix(lidar2ego_translation, Quaternion(lidar2ego_rotation), inverse=True)
-        input_dict['ego2lidar'] = [ego2lidar for _ in range(6)]
+        if self.modality['use_lidar']:
+            lidar_sweeps_prev, lidar_sweeps_next = self.collect_lidar_sweeps(index)
+            input_dict.update(dict(
+                pts_filename=info['lidar_path'],
+                lidar_sweeps={'prev': lidar_sweeps_prev, 'next': lidar_sweeps_next},
+            ))
 
         if self.modality['use_camera']:
             img_paths = []
@@ -93,10 +121,13 @@ class NuScenesOccDataset(NuScenesDataset):
                 lidar2img_rt = (viewpad @ lidar2cam_rt.T)
                 lidar2img_rts.append(lidar2img_rt)
 
+            cam_sweeps_prev, cam_sweeps_next = self.collect_cam_sweeps(index)
+
             input_dict.update(dict(
                 img_filename=img_paths,
                 img_timestamp=img_timestamps,
                 lidar2img=lidar2img_rts,
+                cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
             ))
 
         if not self.test_mode:

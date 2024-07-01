@@ -273,8 +273,11 @@ class OPS(MVXTwoStageDetector):
 
             img_metas_curr = [{}]
             for k in img_metas[0].keys():
-                if isinstance(img_metas[0][k], list):
-                    img_metas_curr[0][k] = [img_metas[0][k][i] for i in img_indices]
+                item = img_metas[0][k]
+                if isinstance(item, list) and (len(item) == 6 * num_frames):
+                    img_metas_curr[0][k] = [item[j] for j in img_indices]
+                else:
+                    img_metas_curr[0][k] = item
 
             if img_filenames[img_indices[0]] in self.memory:
                 # found in memory

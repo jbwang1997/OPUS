@@ -81,7 +81,9 @@ def add_sweep_info(nusc, sample_infos):
                     sweep_info[cam] = sweep_cam
                 sweep_infos.append(sweep_info)
 
-        sample_infos['infos'][curr_id]['sweeps'] = sweep_infos
+        sample_infos['infos'][curr_id]['lidar_sweeps'] = \
+            sample_infos['infos'][curr_id].pop('sweeps')
+        sample_infos['infos'][curr_id]['cam_sweeps'] = sweep_infos
 
     return sample_infos
 

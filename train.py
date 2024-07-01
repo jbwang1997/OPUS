@@ -54,33 +54,28 @@ def main():
     local_rank = int(os.environ['LOCAL_RANK'])
     world_size = int(os.environ['WORLD_SIZE'])
 
+    # resume or start a new run
+    if cfgs.resume_from is not None:
+        assert os.path.isfile(cfgs.resume_from)
+        work_dir = os.path.dirname(cfgs.resume_from)
+    else:
+        run_name = osp.splitext(osp.split(args.config)[-1])[0]
+        run_name += '_' + datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+
+        work_dir = os.path.join('outputs', cfgs.model.type, run_name)
+        if os.path.exists(work_dir):  # must be an empty dir
+            raise FileExistsError(work_dir)
+
     if local_rank == 0:
-        # resume or start a new run
-        if cfgs.resume_from is not None:
-            assert os.path.isfile(cfgs.resume_from)
-            work_dir = os.path.dirname(cfgs.resume_from)
-        else:
-            run_name = osp.splitext(osp.split(args.config)[-1])[0]
-            run_name += '_' + datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
-
-            work_dir = os.path.join('outputs', cfgs.model.type, run_name)
-            if os.path.exists(work_dir):  # must be an empty dir
-                if input('Path "%s" already exists, overwrite it? [Y/n] ' % work_dir) == 'n':
-                    print('Bye.')
-                    exit(0)
-                shutil.rmtree(work_dir)
-
-            os.makedirs(work_dir, exist_ok=False)
+        os.makedirs(work_dir, exist_ok=False)
 
         # init logging, backup code
         utils.init_logging(os.path.join(work_dir, 'train.log'), cfgs.debug)
         utils.backup_code(work_dir)
         logging.info('Logs will be saved to %s' % work_dir)
-
     else:
         # disable logging on other workers
         logging.root.disabled = True
-        work_dir = '/tmp'
 
     logging.info('Using GPU: %s' % torch.cuda.get_device_name(local_rank))
     torch.cuda.set_device(local_rank)
@@ -151,7 +146,8 @@ def main():
 
     if cfgs.eval_config['interval'] > 0:
         if world_size > 1:
-            runner.register_hook(DistEvalHook(val_loader, interval=cfgs.eval_config['interval'], gpu_collect=True))
+            runner.register_hook(DistEvalHook(
+                val_loader, interval=cfgs.eval_config['interval'], gpu_collect=True))
         else:
             runner.register_hook(EvalHook(val_loader, interval=cfgs.eval_config['interval']))
 

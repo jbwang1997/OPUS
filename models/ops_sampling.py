@@ -16,13 +16,13 @@ def make_sample_points(query_points, offset, pc_range):
     return sample_xyz
 
 
-def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, image_w, eps=1e-5):
+def sampling_4d(sample_points, mlvl_feats, scale_weights, occ2img, image_h, image_w, eps=1e-5):
     """
     Args:
         sample_points: 3D sampling points in shape [B, Q, T, G, P, 3]
         mlvl_feats: list of multi-scale features from neck, each in shape [B*T*G, C, N, H, W]
         scale_weights: weights for multi-scale aggregation, [B, Q, G, T, P, L]
-        lidar2img: 4x4 projection matrix in shape [B, TN, 4, 4]
+        occ2img: 4x4 projection matrix in shape [B, TN, 4, 4]
     Symbol meaning:
         B: batch size
         Q: num of queries
@@ -39,9 +39,9 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, im
     sample_points = sample_points.reshape(B, Q, T, G * P, 3)
 
     # get the projection matrix
-    lidar2img = lidar2img[:, :, None, None, :, :]  # [B, TN, 1, 1, 4, 4]
-    lidar2img = lidar2img.expand(B, T*N, Q, G * P, 4, 4)
-    lidar2img = lidar2img.reshape(B, T, N, Q, G*P, 4, 4)
+    occ2img = occ2img[:, :, None, None, :, :]  # [B, TN, 1, 1, 4, 4]
+    occ2img = occ2img.expand(B, T*N, Q, G * P, 4, 4)
+    occ2img = occ2img.reshape(B, T, N, Q, G*P, 4, 4)
 
     # expand the points
     ones = torch.ones_like(sample_points[..., :1])
@@ -51,7 +51,7 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, lidar2img, image_h, im
     sample_points = sample_points.transpose(1, 3)   # [B, T, N, Q, GP, 4, 1]
 
     # project 3d sampling points to N views
-    sample_points_cam = torch.matmul(lidar2img, sample_points).squeeze(-1)  # [B, T, N, Q, GP, 4]
+    sample_points_cam = torch.matmul(occ2img, sample_points).squeeze(-1)  # [B, T, N, Q, GP, 4]
 
     # homo coord -> pixel coord
     homo = sample_points_cam[..., 2:3]

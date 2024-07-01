@@ -24,7 +24,7 @@ class OPSTransformer(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=[1, 2, 4, 8, 16, 32],
-                 scales=[2.0],
+                 scales=[1.0],
                  pc_range=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
@@ -62,7 +62,7 @@ class OPSTransformerDecoder(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
-                 scales=[2.0],
+                 scales=[1.0],
                  pc_range=[],
                  init_cfg=None):
         super(OPSTransformerDecoder, self).__init__(init_cfg)
@@ -96,10 +96,11 @@ class OPSTransformerDecoder(BaseModule):
 
         # organize projections matrix and copy to CUDA
         lidar2img = np.asarray([m['lidar2img'] for m in img_metas]).astype(np.float32)
-        lidar2img = torch.from_numpy(lidar2img).to(query_feat.device)  # [B, N, 4, 4]
+        lidar2img = query_feat.new_tensor(lidar2img) # [B, N, 4, 4]
         ego2lidar = np.asarray([m['ego2lidar'] for m in img_metas]).astype(np.float32)
-        ego2lidar = torch.from_numpy(ego2lidar).to(query_feat.device)  # [B, N, 4, 4]
-        img_metas[0]['ego2img'] = torch.matmul(lidar2img, ego2lidar)
+        ego2lidar = query_feat.new_tensor(ego2lidar) # [B, 4, 4]
+        ego2lidar = ego2lidar.unsqueeze(1).expand_as(lidar2img)  # [B, N, 4, 4]
+        occ2img = torch.matmul(lidar2img, ego2lidar)
 
         # group image features in advance for sampling, see `sampling_4d` for more details
         for lvl, feat in enumerate(mlvl_feats):
@@ -121,7 +122,7 @@ class OPSTransformerDecoder(BaseModule):
 
             query_points = query_points.detach()
             query_feat, cls_score, query_points = decoder_layer(
-                query_points, query_feat, mlvl_feats, img_metas)
+                query_points, query_feat, mlvl_feats, occ2img, img_metas)
 
             cls_scores.append(cls_score)
             refine_pts.append(query_points)
@@ -141,7 +142,7 @@ class OPSTransformerDecoderLayer(BaseModule):
                  num_cls_fcs=2,
                  num_reg_fcs=2,
                  layer_idx=0,
-                 scale=2.0,
+                 scale=1.0,
                  pc_range=[],
                  init_cfg=None):
         super(OPSTransformerDecoderLayer, self).__init__(init_cfg)
@@ -211,14 +212,15 @@ class OPSTransformerDecoderLayer(BaseModule):
         new_points = points_proposal + points_delta
         return encode_points(new_points, self.pc_range)
 
-    def forward(self, query_points, query_feat, mlvl_feats, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, occ2img, img_metas):
         """
         query_points: [B, Q, 3] [x, y, z]
         """
         query_pos = self.position_encoder(query_points.flatten(2, 3))
         query_feat = query_feat + query_pos
 
-        sampled_feat = self.sampling(query_points, query_feat, mlvl_feats, img_metas)
+        sampled_feat = self.sampling(
+            query_points, query_feat, mlvl_feats, occ2img, img_metas)
         query_feat = self.norm1(self.mixing(sampled_feat, query_feat))
         query_feat = self.norm2(self.self_attn(query_points, query_feat))
         query_feat = self.norm3(self.ffn(query_feat))
@@ -312,7 +314,7 @@ class OPSSampling(BaseModule):
         nn.init.zeros_(self.sampling_offset.weight)
         nn.init.uniform_(bias[:, 0:3], -0.5, 0.5)
 
-    def inner_forward(self, query_points, query_feat, mlvl_feats, img_metas):
+    def inner_forward(self, query_points, query_feat, mlvl_feats, occ2img, img_metas):
         '''
         query_points: [B, Q, 6]
         query_feat: [B, Q, C]
@@ -348,18 +350,19 @@ class OPSSampling(BaseModule):
             sampling_points,
             mlvl_feats,
             scale_weights,
-            img_metas[0]['ego2img'],
+            occ2img,
             image_h, image_w
         )  # [B, Q, G, FP, C]
 
         return sampled_feats
 
-    def forward(self, query_points, query_feat, mlvl_feats, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, occ2img, img_metas):
         if self.training and query_feat.requires_grad:
             return cp(self.inner_forward, query_points, query_feat, mlvl_feats,
-                      img_metas, use_reentrant=False)
+                      occ2img, img_metas, use_reentrant=False)
         else:
-            return self.inner_forward(query_points, query_feat, mlvl_feats, img_metas)
+            return self.inner_forward(query_points, query_feat, mlvl_feats,
+                                      occ2img, img_metas)
 
 
 class AdaptiveMixing(nn.Module):
