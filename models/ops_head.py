@@ -106,12 +106,7 @@ class OPSHead(BaseModule):
             (loc + 0.5) * self.voxel_size + self.pc_range[:3]
 
     @torch.no_grad()
-    def _get_target_single(self,
-                           refine_pts,
-                           gt_points,
-                           gt_masks,
-                           gt_labels,
-                           mask_camera):
+    def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
         # knn to apply Chamfer distance
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
         gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
@@ -128,13 +123,13 @@ class OPSHead(BaseModule):
             self.get_dis_weight(pred_paired_pts)[..., None]
 
         # gt side assignment
-        empty_dist_thr1 = self.train_cfg.get('empty_dist_thr1', 0.2)
-        empty_weights1 = self.train_cfg.get('empty_weights1', 5)
+        empty_dist_thr = self.train_cfg.get('empty_dist_thr', 0.2)
+        empty_weights = self.train_cfg.get('empty_weights', 5)
 
         gt_pts_weights = refine_pts.new_ones(gt_paired_pts.shape[0])
         dist = torch.norm(gt_points - gt_paired_pts, dim=-1)
-        mask = (dist > empty_dist_thr1) & gt_masks
-        gt_pts_weights[mask] = empty_weights1
+        mask = (dist > empty_dist_thr) & gt_masks
+        gt_pts_weights[mask] = empty_weights
 
         rare_classes = self.train_cfg.get('rare_classes', [0, 2, 5, 8])
         rare_weights = self.train_cfg.get('rare_weights', 10)
@@ -154,8 +149,7 @@ class OPSHead(BaseModule):
                     refine_pts,
                     gt_points_list,
                     gt_masks_list,
-                    gt_labels_list,
-                    mask_camera):
+                    gt_labels_list):
         num_imgs = cls_scores.size(0) # B
         cls_scores = cls_scores.reshape(num_imgs, -1, self.num_classes)
         refine_pts = refine_pts.reshape(num_imgs, -1, 3)
@@ -166,7 +160,7 @@ class OPSHead(BaseModule):
         (labels_list, gt_paired_idx_list, pred_paired_idx_list, cls_weights,
          gt_pts_weights) = multi_apply(
              self._get_target_single, refine_pts_list, gt_points_list, 
-             gt_masks_list, gt_labels_list, mask_camera)
+             gt_masks_list, gt_labels_list)
         
         gt_paired_pts, pred_paired_pts= [], []
         for i in range(num_imgs):
@@ -213,13 +207,10 @@ class OPSHead(BaseModule):
         all_gt_points_list = [gt_points_list for _ in range(num_dec_layers)]
         all_gt_masks_list = [gt_masks_list for _ in range(num_dec_layers)]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
-        all_mask_camera = [mask_camera for _ in range(num_dec_layers)]
 
         losses_cls, losses_pts = multi_apply(
             self.loss_single, all_cls_scores, all_refine_pts, 
-            all_gt_points_list, all_gt_masks_list, all_gt_labels_list,
-            all_mask_camera
-        )
+            all_gt_points_list, all_gt_masks_list, all_gt_labels_list)
 
         loss_dict = dict()
         # loss of init_points
@@ -228,7 +219,7 @@ class OPSHead(BaseModule):
                 *init_points.shape[:-1], self.num_classes)
             _, init_loss_pts = self.loss_single(
                 pseudo_scores, init_points, gt_points_list, 
-                gt_masks_list, gt_labels_list, mask_camera)
+                gt_masks_list, gt_labels_list)
             loss_dict['init_loss_pts'] = init_loss_pts
 
         # loss from the last decoder layer
