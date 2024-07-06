@@ -31,11 +31,10 @@ class OPS(MVXTwoStageDetector):
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None):
-        super(OPS, self).__init__(pts_voxel_layer, pts_voxel_encoder,
-                                  pts_middle_encoder, pts_fusion_layer,
-                                  img_backbone, pts_backbone, img_neck, pts_neck,
-                                  pts_bbox_head, img_roi_head, img_rpn_head,
-                                  train_cfg, test_cfg, pretrained)
+        super().__init__(pts_voxel_layer, pts_voxel_encoder, pts_middle_encoder,
+                         pts_fusion_layer, img_backbone, pts_backbone, img_neck,
+                         pts_neck, pts_bbox_head, img_roi_head, img_rpn_head,
+                         train_cfg, test_cfg, pretrained)
         self.data_aug = data_aug
         self.stop_prev_grad = stop_prev_grad
         self.color_aug = GpuPhotoMetricDistortion()

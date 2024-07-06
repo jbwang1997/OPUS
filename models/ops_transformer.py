@@ -65,7 +65,7 @@ class OPSTransformerDecoder(BaseModule):
                  scales=[1.0],
                  pc_range=[],
                  init_cfg=None):
-        super(OPSTransformerDecoder, self).__init__(init_cfg)
+        super().__init__(init_cfg)
         self.num_layers = num_layers
         self.pc_range = pc_range
 
@@ -145,7 +145,7 @@ class OPSTransformerDecoderLayer(BaseModule):
                  scale=1.0,
                  pc_range=[],
                  init_cfg=None):
-        super(OPSTransformerDecoderLayer, self).__init__(init_cfg)
+        super().__init__(init_cfg)
 
         self.embed_dims = embed_dims
         self.num_classes = num_classes
@@ -368,7 +368,7 @@ class OPSSampling(BaseModule):
 class AdaptiveMixing(nn.Module):
     """Adaptive Mixing"""
     def __init__(self, in_dim, in_points, n_groups=1, query_dim=None, out_dim=None, out_points=None):
-        super(AdaptiveMixing, self).__init__()
+        super().__init__()
 
         out_dim = out_dim if out_dim is not None else in_dim
         out_points = out_points if out_points is not None else in_points
