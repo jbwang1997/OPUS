@@ -72,7 +72,6 @@ model = dict(
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
-        sync_cls_avg_factor=True,
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
         transformer=dict(

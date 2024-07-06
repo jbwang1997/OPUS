@@ -143,6 +143,9 @@ def main():
     runner.register_logger_hooks(cfgs.log_config)
     runner.register_timer_hook(dict(type='IterTimerHook'))
     runner.register_custom_hooks(dict(type='DistSamplerSeedHook'))
+    if cfgs.get('custom_hooks', None) is not None:
+        for hook_cfg in cfgs.custom_hooks:
+            runner.register_custom_hooks(hook_cfg)
 
     if cfgs.eval_config['interval'] > 0:
         if world_size > 1:

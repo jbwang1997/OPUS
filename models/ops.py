@@ -132,36 +132,6 @@ class OPS(MVXTwoStageDetector):
 
         return img_feats_reshaped
 
-    def forward_pts_train(self,
-                          pts_feats,
-                          gt_bboxes_3d,
-                          gt_labels_3d,
-                          voxel_semantics,
-                          mask_camera,
-                          img_metas,
-                          gt_bboxes_ignore=None):
-        """Forward function for point cloud branch.
-        Args:
-            pts_feats (list[torch.Tensor]): Features of point cloud branch
-            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`]): Ground truth
-                boxes for each sample.
-            gt_labels_3d (list[torch.Tensor]): Ground truth labels for
-                boxes of each sampole
-            img_metas (list[dict]): Meta information of samples.
-            gt_bboxes_ignore (list[torch.Tensor], optional): Ground truth
-                boxes to be ignored. Defaults to None.
-        Returns:
-            dict: Losses of each branch.
-        """
-        t1 = time.time()
-        outs = self.pts_bbox_head(pts_feats, img_metas)
-        t2 = time.time()
-        loss_inputs = [voxel_semantics, mask_camera, outs]
-        losses = self.pts_bbox_head.loss(*loss_inputs)
-        t3 = time.time()
-
-        return losses
-
     @force_fp32(apply_to=('img', 'points'))
     def forward(self, return_loss=True, **kwargs):
         """Calls either forward_train or forward_test depending on whether
@@ -216,13 +186,10 @@ class OPS(MVXTwoStageDetector):
             dict: Losses of different branches.
         """
         img_feats = self.extract_feat(img, img_metas)
-        losses = self.forward_pts_train(img_feats, 
-                                        gt_bboxes_3d,
-                                        gt_labels_3d,
-                                        voxel_semantics,
-                                        mask_camera,
-                                        img_metas,
-                                        gt_bboxes_ignore)
+
+        outs = self.pts_bbox_head(img_feats, img_metas)
+        loss_inputs = [voxel_semantics, mask_camera, outs]
+        losses = self.pts_bbox_head.loss(*loss_inputs)
 
         return losses
 
