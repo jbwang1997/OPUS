@@ -61,12 +61,11 @@ def main():
     else:
         run_name = osp.splitext(osp.split(args.config)[-1])[0]
         run_name += '_' + datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
-
         work_dir = os.path.join('outputs', cfgs.model.type, run_name)
-        if os.path.exists(work_dir):  # must be an empty dir
-            raise FileExistsError(work_dir)
 
     if local_rank == 0:
+        if os.path.exists(work_dir):  # must be an empty dir
+            raise FileExistsError(work_dir)
         os.makedirs(work_dir, exist_ok=False)
 
         # init logging, backup code

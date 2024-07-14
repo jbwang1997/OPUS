@@ -31,11 +31,11 @@ voxel_size = [0.4, 0.4, 0.4]
 # arch config
 embed_dims = 256
 num_layers = 6
-num_query = 600
-num_frames = 8
+num_query = 4800
+num_frames = 16
 num_levels = 4
-num_points = 4
-num_refines = [1, 4, 16, 32, 64, 128]
+num_points = 2
+num_refines = [1, 2, 4, 8, 16, 16]
 
 img_backbone = dict(
     type='ResNet',
@@ -83,7 +83,7 @@ model = dict(
             num_levels=num_levels,
             num_classes=len(occ_names),
             num_refines=num_refines,
-            scales=[1.0],
+            scales=[0.5],
             pc_range=point_cloud_range),
         loss_cls=dict(
             type='FocalLoss',
@@ -101,7 +101,8 @@ model = dict(
     test_cfg=dict(
         pts=dict(
             score_thr=0.5,
-            padding=True)
+            padding=True
+        )
     )
 )
 
@@ -200,7 +201,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 12
+total_epochs = 100
 batch_size = 8
 
 # load pretrained weights

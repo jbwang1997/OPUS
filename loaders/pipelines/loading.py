@@ -1,5 +1,6 @@
 import os
 import mmcv
+import torch
 import numpy as np
 import os.path as osp
 from mmdet3d.datasets.builder import PIPELINES
@@ -69,7 +70,7 @@ class LoadOccFromFile:
 
 
 @PIPELINES.register_module()
-class LoadMultiViewImageFromMultiSweeps(object):
+class LoadMultiViewImageFromMultiSweeps:
     def __init__(self,
                  sweeps_num=5,
                  color_type='color',
@@ -194,7 +195,7 @@ class LoadMultiViewImageFromMultiSweeps(object):
 
 
 @PIPELINES.register_module()
-class LoadMultiViewImageFromMultiSweepsFuture(object):
+class LoadMultiViewImageFromMultiSweepsFuture:
     def __init__(self,
                  prev_sweeps_num=5,
                  next_sweeps_num=5,
@@ -301,7 +302,7 @@ This func loads previous and future frames in interleaved order,
 e.g. curr, prev1, next1, prev2, next2, prev3, next3...
 '''
 @PIPELINES.register_module()
-class LoadMultiViewImageFromMultiSweepsFutureInterleave(object):
+class LoadMultiViewImageFromMultiSweepsFutureInterleave:
     def __init__(self,
                  prev_sweeps_num=5,
                  next_sweeps_num=5,
@@ -433,7 +434,7 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave(object):
 
 # Repalce LoadPointsFromMultiSweeps in mmdet3d to adapt sparsebev data
 @PIPELINES.register_module(force=True)
-class LoadPointsFromMultiSweeps(object):
+class LoadPointsFromMultiSweeps:
     """Load points from multiple sweeps.
 
     This is usually used for nuScenes dataset to utilize previous sweeps.
@@ -581,3 +582,22 @@ class LoadPointsFromMultiSweeps(object):
     def __repr__(self):
         """str: Return a string that describes the module."""
         return f'{self.__class__.__name__}(sweeps_num={self.sweeps_num})'
+
+
+@PIPELINES.register_module()
+class PointsFromLiDARToEgo:
+
+    def __init__(self, base='ego'):
+        self.base = base
+    
+    def __call__(self, results):
+        points, ego2lidar = results['points'], results['ego2lidar']
+
+        lidar2ego = torch.tensor(np.linalg.inv(ego2lidar)).float()
+        ones = torch.ones_like(points.tensor[..., :1])
+        pts = torch.cat([points.tensor[..., :3], ones], dim=1).transpose(0, 1)
+        pts = torch.matmul(lidar2ego, pts).transpose(0, 1)
+
+        points.tensor = torch.cat([pts, points.tensor[..., 3:]], dim=1)
+        results['points'] = points
+        return results

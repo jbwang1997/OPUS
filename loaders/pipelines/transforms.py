@@ -7,7 +7,7 @@ from mmdet.datasets.builder import PIPELINES
 
 
 @PIPELINES.register_module()
-class PadMultiViewImage(object):
+class PadMultiViewImage:
     """Pad the multi-view image.
     There are two padding modes: (1) pad to a fixed size and (2) pad to the
     minimum size that is divisible by some number.
@@ -66,7 +66,7 @@ class PadMultiViewImage(object):
 
 
 @PIPELINES.register_module()
-class NormalizeMultiviewImage(object):
+class NormalizeMultiviewImage:
     """Normalize the image.
     Added key is "img_norm_cfg".
     Args:
@@ -216,7 +216,7 @@ class PhotoMetricDistortionMultiViewImage:
 
 
 @PIPELINES.register_module()
-class RandomTransformImage(object):
+class RandomTransformImage:
     def __init__(self, ida_aug_conf=None, training=True):
         self.ida_aug_conf = ida_aug_conf
         self.training = training
@@ -342,7 +342,7 @@ class RandomTransformImage(object):
 
 
 @PIPELINES.register_module()
-class GlobalRotScaleTransImage(object):
+class GlobalRotScaleTransImage:
     def __init__(self,
                  rot_range=[-0.3925, 0.3925],
                  scale_ratio_range=[0.95, 1.05],
