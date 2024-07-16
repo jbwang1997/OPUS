@@ -38,23 +38,23 @@ python setup.py build_ext --inplace
 
 ## Prepare Dataset
 
-1. Download nuScenes from [https://www.nuscenes.org/nuscenes](https://www.nuscenes.org/nuscenes) and put it in `data/nuscenes`.
+1. Download nuScenes from [https://www.nuscenes.org/nuscenes](https://www.nuscenes.org/nuscenes) and place it in folder `data/nuscenes`.
 
-2. Download Occ3d-nuScenes from [https://tsinghua-mars-lab.github.io/Occ3D/](https://tsinghua-mars-lab.github.io/Occ3D/) and put it in `data/nuscenes/gts`
+2. Download Occ3d-nuScenes from [https://tsinghua-mars-lab.github.io/Occ3D/](https://tsinghua-mars-lab.github.io/Occ3D/) and place it in `data/nuscenes/gts`
 
-3. Run data preparation code in mmdet3d:
+3. Prepare data with scripts provided by mmdet3d:
 
 ```
 mim run mmdet3d create_data nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes
 ```
 
-4. Run data preparation code in OPS:
+4. Perform data preparation for OPS:
 
 ```
 python gen_sweep_info.py
 ```
 
-5. Folder structure:
+The final folder structure would be
 
 ```
 data/nuscenes
@@ -70,12 +70,12 @@ data/nuscenes
 └── v1.0-trainval
 ```
 
-These `*.pkl` files can also be generated with our script: `gen_sweep_info.py`.
+Note: These `*.pkl` files can also be generated with our script: `gen_sweep_info.py`.
 
 ## Training
 
-Download pretrained [weights](https://download.openmmlab.com/mmdetection3d/v0.1.0_models/nuimages_semseg/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth)
-provoided by mmdet3d, and put it in directory `pretrain/`:
+Download pre-trained [weights](https://download.openmmlab.com/mmdetection3d/v0.1.0_models/nuimages_semseg/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth)
+provided by mmdet3d, and put them in directory `pretrain/`:
 
 
 ```
@@ -96,7 +96,7 @@ Train OPS with 8 GPUs:
 bash dist_train.sh 8 configs/ops-t_r50_704x256_8f_12e.py
 ```
 
-The batch size for each GPU will be scaled automatically. So there is no need to modify the `batch_size` in config files.
+Note: The batch size for each GPU will be scaled automatically. So there is no need to modify the `batch_size` in configurations.
 
 ## Evaluation
 
