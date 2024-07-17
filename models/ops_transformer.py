@@ -19,6 +19,7 @@ class OPSTransformer(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
+                 num_views=6,
                  num_points=4,
                  num_layers=6,
                  num_levels=4,
@@ -37,7 +38,7 @@ class OPSTransformer(BaseModule):
         self.num_refines = num_refines
 
         self.decoder = OPSTransformerDecoder(
-            embed_dims, num_frames, num_points, num_layers, num_levels,
+            embed_dims, num_frames, num_views, num_points, num_layers, num_levels,
             num_classes, num_refines, num_groups, scales, pc_range=pc_range)
 
     @torch.no_grad()
@@ -58,6 +59,7 @@ class OPSTransformerDecoder(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
+                 num_views=6,
                  num_points=4,
                  num_layers=6,
                  num_levels=4,
@@ -70,7 +72,8 @@ class OPSTransformerDecoder(BaseModule):
         super().__init__(init_cfg)
         self.num_layers = num_layers
         self.pc_range = pc_range
-        self.num_frames = num_frames        
+        self.num_frames = num_frames
+        self.num_views = num_views
         self.num_groups = num_groups
 
         if len(scales) == 1:
@@ -86,7 +89,7 @@ class OPSTransformerDecoder(BaseModule):
         for i in range(num_layers):
             self.decoder_layers.append(
                 OPSTransformerDecoderLayer(
-                    embed_dims, num_frames, num_points, num_levels, num_classes, 
+                    embed_dims, num_frames, num_views, num_points, num_levels, num_classes, 
                     num_groups, num_refines[i], last_refines[i], layer_idx=i, 
                     scale=scales[i], pc_range=pc_range)
             )
@@ -109,7 +112,8 @@ class OPSTransformerDecoder(BaseModule):
         # group image features in advance for sampling, see `sampling_4d` for more details
         for lvl, feat in enumerate(mlvl_feats):
             B, TN, GC, H, W = feat.shape  # [B, TN, GC, H, W]
-            N, T, G, C = TN//self.num_frames, self.num_frames, self.num_groups, GC//self.num_groups
+            N, T, G, C = self.num_views, self.num_frames, self.num_groups, GC//self.num_groups
+            assert T*N == TN
             feat = feat.reshape(B, T, N, G, C, H, W)
 
             if MSMV_CUDA:  # Our CUDA operator requires channel_last
@@ -138,6 +142,7 @@ class OPSTransformerDecoderLayer(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
+                 num_views=6,
                  num_points=4,
                  num_levels=4,
                  num_classes=10,
@@ -172,9 +177,9 @@ class OPSTransformerDecoderLayer(BaseModule):
 
         self.self_attn = OPSSelfAttention(
             embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
-        self.sampling = OPSSampling(embed_dims, num_frames=num_frames, num_groups=num_groups,
-                                    num_points=num_points, num_levels=num_levels,
-                                    pc_range=pc_range)
+        self.sampling = OPSSampling(embed_dims, num_frames=num_frames, num_views=num_views,
+                                     num_groups=num_groups, num_points=num_points, 
+                                     num_levels=num_levels, pc_range=pc_range)
         self.mixing = AdaptiveMixing(in_dim=embed_dims, in_points=num_points * num_frames,
                                      n_groups=num_groups, out_points=32)
         self.ffn = FFN(embed_dims, feedforward_channels=512, ffn_drop=0.1)
@@ -226,6 +231,7 @@ class OPSTransformerDecoderLayer(BaseModule):
 
         sampled_feat = self.sampling(
             query_points, query_feat, mlvl_feats, occ2img, img_metas)
+        import pdb; pdb.set_trace()
         query_feat = self.norm1(self.mixing(sampled_feat, query_feat))
         query_feat = self.norm2(self.self_attn(query_points, query_feat))
         query_feat = self.norm3(self.ffn(query_feat))
@@ -298,6 +304,7 @@ class OPSSampling(BaseModule):
     def __init__(self,
                  embed_dims=256,
                  num_frames=4,
+                 num_views=6,
                  num_groups=4,
                  num_points=8,
                  num_levels=4,
@@ -307,6 +314,7 @@ class OPSSampling(BaseModule):
 
         self.num_frames = num_frames
         self.num_points = num_points
+        self.num_views = num_views
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.pc_range = pc_range
@@ -356,7 +364,8 @@ class OPSSampling(BaseModule):
             mlvl_feats,
             scale_weights,
             occ2img,
-            image_h, image_w
+            image_h, image_w,
+            self.num_views
         )  # [B, Q, G, FP, C]
 
         return sampled_feats

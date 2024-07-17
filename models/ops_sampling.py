@@ -16,7 +16,7 @@ def make_sample_points(query_points, offset, pc_range):
     return sample_xyz
 
 
-def sampling_4d(sample_points, mlvl_feats, scale_weights, occ2img, image_h, image_w, eps=1e-5):
+def sampling_4d(sample_points, mlvl_feats, scale_weights, occ2img, image_h, image_w, num_views=6, eps=1e-5):
     """
     Args:
         sample_points: 3D sampling points in shape [B, Q, T, G, P, 3]
@@ -34,7 +34,7 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, occ2img, image_h, imag
     """
 
     B, Q, T, G, P, _ = sample_points.shape  # [B, Q, T, G, P, 3]
-    N = 6
+    N = num_views
     
     sample_points = sample_points.reshape(B, Q, T, G * P, 3)
 
