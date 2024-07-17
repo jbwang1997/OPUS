@@ -231,7 +231,6 @@ class OPSTransformerDecoderLayer(BaseModule):
 
         sampled_feat = self.sampling(
             query_points, query_feat, mlvl_feats, occ2img, img_metas)
-        import pdb; pdb.set_trace()
         query_feat = self.norm1(self.mixing(sampled_feat, query_feat))
         query_feat = self.norm2(self.self_attn(query_points, query_feat))
         query_feat = self.norm3(self.ffn(query_feat))
