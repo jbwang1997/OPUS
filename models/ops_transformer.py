@@ -23,6 +23,7 @@ class OPSTransformer(BaseModule):
                  num_layers=6,
                  num_levels=4,
                  num_classes=10,
+                 num_groups=4,
                  num_refines=[1, 2, 4, 8, 16, 32],
                  scales=[1.0],
                  pc_range=[],
@@ -37,7 +38,7 @@ class OPSTransformer(BaseModule):
 
         self.decoder = OPSTransformerDecoder(
             embed_dims, num_frames, num_points, num_layers, num_levels,
-            num_classes, num_refines, scales, pc_range=pc_range)
+            num_classes, num_refines, num_groups, scales, pc_range=pc_range)
 
     @torch.no_grad()
     def init_weights(self):
@@ -62,12 +63,15 @@ class OPSTransformerDecoder(BaseModule):
                  num_levels=4,
                  num_classes=10,
                  num_refines=16,
+                 num_groups=4,
                  scales=[1.0],
                  pc_range=[],
                  init_cfg=None):
         super().__init__(init_cfg)
         self.num_layers = num_layers
         self.pc_range = pc_range
+        self.num_frames = num_frames        
+        self.num_groups = num_groups
 
         if len(scales) == 1:
             scales = scales * num_layers
@@ -83,8 +87,8 @@ class OPSTransformerDecoder(BaseModule):
             self.decoder_layers.append(
                 OPSTransformerDecoderLayer(
                     embed_dims, num_frames, num_points, num_levels, num_classes, 
-                    num_refines[i], last_refines[i], layer_idx=i, scale=scales[i],
-                    pc_range=pc_range)
+                    num_groups, num_refines[i], last_refines[i], layer_idx=i, 
+                    scale=scales[i], pc_range=pc_range)
             )
 
     @torch.no_grad()
@@ -105,7 +109,7 @@ class OPSTransformerDecoder(BaseModule):
         # group image features in advance for sampling, see `sampling_4d` for more details
         for lvl, feat in enumerate(mlvl_feats):
             B, TN, GC, H, W = feat.shape  # [B, TN, GC, H, W]
-            N, T, G, C = 6, TN // 6, 4, GC // 4
+            N, T, G, C = TN//self.num_frames, self.num_frames, self.num_groups, GC//self.num_groups
             feat = feat.reshape(B, T, N, G, C, H, W)
 
             if MSMV_CUDA:  # Our CUDA operator requires channel_last
@@ -137,6 +141,7 @@ class OPSTransformerDecoderLayer(BaseModule):
                  num_points=4,
                  num_levels=4,
                  num_classes=10,
+                 num_groups=4,
                  num_refines=16,
                  last_refines=16,
                  num_cls_fcs=2,
@@ -167,11 +172,11 @@ class OPSTransformerDecoderLayer(BaseModule):
 
         self.self_attn = OPSSelfAttention(
             embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
-        self.sampling = OPSSampling(embed_dims, num_frames=num_frames, num_groups=4,
+        self.sampling = OPSSampling(embed_dims, num_frames=num_frames, num_groups=num_groups,
                                     num_points=num_points, num_levels=num_levels,
                                     pc_range=pc_range)
         self.mixing = AdaptiveMixing(in_dim=embed_dims, in_points=num_points * num_frames,
-                                     n_groups=4, out_points=32)
+                                     n_groups=num_groups, out_points=32)
         self.ffn = FFN(embed_dims, feedforward_channels=512, ffn_drop=0.1)
 
         self.norm1 = nn.LayerNorm(embed_dims)
