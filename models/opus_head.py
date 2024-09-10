@@ -11,7 +11,7 @@ from .bbox.utils import decode_points
 
 
 @HEADS.register_module()
-class OPSHead(BaseModule):
+class OPUSHead(BaseModule):
     def __init__(self,
                  num_classes,
                  in_channels,

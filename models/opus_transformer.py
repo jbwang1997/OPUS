@@ -9,13 +9,13 @@ from mmcv.ops import knn
 from mmdet.models.utils.builder import TRANSFORMER
 from .bbox.utils import decode_bbox, decode_points, encode_points
 from .utils import inverse_sigmoid, DUMP
-from .ops_sampling import sampling_4d
+from .opus_sampling import sampling_4d
 from .checkpoint import checkpoint as cp
 from .csrc.wrapper import MSMV_CUDA
 
 
 @TRANSFORMER.register_module()
-class OPSTransformer(BaseModule):
+class OPUSTransformer(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -37,7 +37,7 @@ class OPSTransformer(BaseModule):
         self.pc_range = pc_range
         self.num_refines = num_refines
 
-        self.decoder = OPSTransformerDecoder(
+        self.decoder = OPUSTransformerDecoder(
             embed_dims, num_frames, num_views, num_points, num_layers, num_levels,
             num_classes, num_refines, num_groups, scales, pc_range=pc_range)
 
@@ -55,7 +55,7 @@ class OPSTransformer(BaseModule):
         return cls_scores, refine_pts
 
 
-class OPSTransformerDecoder(BaseModule):
+class OPUSTransformerDecoder(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -88,7 +88,7 @@ class OPSTransformerDecoder(BaseModule):
         self.decoder_layers = ModuleList()
         for i in range(num_layers):
             self.decoder_layers.append(
-                OPSTransformerDecoderLayer(
+                OPUSTransformerDecoderLayer(
                     embed_dims, num_frames, num_views, num_points, num_levels, num_classes, 
                     num_groups, num_refines[i], last_refines[i], layer_idx=i, 
                     scale=scales[i], pc_range=pc_range)
@@ -138,7 +138,7 @@ class OPSTransformerDecoder(BaseModule):
         return cls_scores, refine_pts
 
 
-class OPSTransformerDecoderLayer(BaseModule):
+class OPUSTransformerDecoderLayer(BaseModule):
     def __init__(self,
                  embed_dims,
                  num_frames=8,
@@ -175,9 +175,9 @@ class OPSTransformerDecoderLayer(BaseModule):
             nn.ReLU(inplace=True),
         )
 
-        self.self_attn = OPSSelfAttention(
+        self.self_attn = OPUSSelfAttention(
             embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
-        self.sampling = OPSSampling(embed_dims, num_frames=num_frames, num_views=num_views,
+        self.sampling = OPUSSampling(embed_dims, num_frames=num_frames, num_views=num_views,
                                      num_groups=num_groups, num_points=num_points, 
                                      num_levels=num_levels, pc_range=pc_range)
         self.mixing = AdaptiveMixing(in_dim=embed_dims, in_points=num_points * num_frames,
@@ -247,7 +247,7 @@ class OPSTransformerDecoderLayer(BaseModule):
         return query_feat, cls_score, refine_pt
 
 
-class OPSSelfAttention(BaseModule):
+class OPUSSelfAttention(BaseModule):
     """Scale-adaptive Self Attention"""
     def __init__(self, 
                  embed_dims=256,
@@ -298,7 +298,7 @@ class OPSSelfAttention(BaseModule):
         return -dist
 
 
-class OPSSampling(BaseModule):
+class OPUSSampling(BaseModule):
     """Adaptive Spatio-temporal Sampling"""
     def __init__(self,
                  embed_dims=256,

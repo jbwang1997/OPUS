@@ -31,11 +31,11 @@ voxel_size = [0.4, 0.4, 0.4]
 # arch config
 embed_dims = 256
 num_layers = 6
-num_query = 600
+num_query = 1200
 num_frames = 8
 num_levels = 4
-num_points = 4
-num_refines = [1, 4, 16, 32, 64, 128]
+num_points = 2
+num_refines = [1, 4, 8, 16, 32, 64]
 
 img_backbone = dict(
     type='ResNet',
@@ -58,7 +58,7 @@ img_norm_cfg = dict(
     to_rgb=True)
 
 model = dict(
-    type='OPS',
+    type='OPUS',
     use_grid_mask=False,
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
@@ -68,14 +68,14 @@ model = dict(
     img_backbone=img_backbone,
     img_neck=img_neck,
     pts_bbox_head=dict(
-        type='OPSHead',
+        type='OPUSHead',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
         transformer=dict(
-            type='OPSTransformer',
+            type='OPUSTransformer',
             embed_dims=embed_dims,
             num_frames=num_frames,
             num_points=num_points,
@@ -101,7 +101,8 @@ model = dict(
     test_cfg=dict(
         pts=dict(
             score_thr=0.5,
-            padding=True)
+            padding=True
+        )
     )
 )
 
@@ -200,7 +201,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 24
+total_epochs = 100
 batch_size = 8
 
 # load pretrained weights

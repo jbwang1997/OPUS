@@ -12,7 +12,7 @@ from .utils import GridMask, pad_multiple, GpuPhotoMetricDistortion
 
 
 @DETECTORS.register_module()
-class OPS(MVXTwoStageDetector):
+class OPUS(MVXTwoStageDetector):
     def __init__(self,
                  use_grid_mask=True,
                  data_aug=None,
