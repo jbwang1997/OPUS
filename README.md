@@ -7,12 +7,12 @@
 
 > **OPUS: Occupancy Prediction Using a Saprse Set**
 > - Authors: [Jiabao Wang*](https://jbwang1997.github.io/),
-> [zhaojiang liu*](https://agito555.github.io/),
+> [Zhaojiang Liu*](https://agito555.github.io/),
 > [Qiang Meng](https://irvingmeng.github.io/), Liujiang Yan, Ke Wang,
 > [Jie Yang](http://www.pami.sjtu.edu.cn/jieyang),
 > [Wei Liu](http://www.pami.sjtu.edu.cn/weiliu),
 > [Qibin Hou#](https://houqb.github.io/),
-> [Ming-Ming Cheng](https://mmcheng.net/cmm/)
+> [Ming-Ming Cheng](https://mmcheng.net/cmm/) \
 > (* Equal contribition, # Corresponding author)
 > - [Paper in arXiv]()
 
