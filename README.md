@@ -43,7 +43,7 @@ Finally, compared with current state-of-the-art methods, our lightest model achi
 | [OPUS-M](configs/opus-m_r50_704x256_8f_100e.py) |   100  | 2400 | 32  | 35.6 |         33.7        |         41.1        |         46.0        |  40.3  | 13.4 |   -  |
 | [OPUS-L](configs/opus-l_r50_704x256_8f_100e.py) |   100  | 4800 | 16  | 36.2 |         34.7        |         42.1        |         46.7        |  41.2  |  7.2 |   -  |
 
-**note: *Q* means number queries. *P* means predicted points per query.**
+**note: *Q* denotes query numbers. *P* is the number of predicted points per query.**
 
 ## Training and Evaluation
 
