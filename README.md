@@ -1,6 +1,53 @@
-# OPS: Occupancy Prediction as a Sparse Set
+<div align="center">
 
-## Environment
+# OPUS: Occupancy Prediction Using a Sparse Set
+</div>
+
+![demo](demos/teaser.png)
+
+> **OPUS: Occupancy Prediction Using a Saprse Set**
+> - Authors: [Jiabao Wang*](https://jbwang1997.github.io/),
+> [zhaojiang liu*](https://agito555.github.io/),
+> [Qiang Meng](https://irvingmeng.github.io/), Liujiang Yan, Ke Wang,
+> [Jie Yang](http://www.pami.sjtu.edu.cn/jieyang),
+> [Wei Liu](http://www.pami.sjtu.edu.cn/weiliu),
+> [Qibin Hou#](https://houqb.github.io/),
+> [Ming-Ming Cheng](https://mmcheng.net/cmm/)
+> (* Equal contribition, # Corresponding author)
+> - [Paper in arXiv]()
+
+## News
+
+- [2024/9/13]: We release an initial version of OPUS. It achieves promising performance of 41.2 RayIoU and 36.2 mIoU on the NuScene-Occ3D dataset.
+
+## Abstract
+Occupancy prediction, aiming at predicting the occupancy status within voxelized 3D environment, is quickly gaining momentum within the autonomous driving community.
+Mainstream occupancy prediction works first discretize the 3D environment into voxels, then perform classification on such dense grids. However, inspection on sample data reveals that the vast majority of voxels is unoccupied. Performing classification on these empty voxels demands suboptimal computation resource allocation, and reducing such empty voxels necessitates complex algorithm designs.
+To this end, we present a novel perspective on the occupancy prediction task: formulating it as a streamlined set prediction paradigm without the need for explicit space modeling or complex sparsification procedures.
+Our proposed framework, called **OPUS**, utilizes a transformer encoder-decoder architecture to simultaneously predict occupied locations and classes using a set of learnable queries.
+Firstly, we employ the Chamfer distance loss to scale the set-to-set comparison problem to unprecedented magnitudes, making training such model end-to-end a reality.
+Subsequently, semantic classes are adaptively assigned using nearest neighbor search based on the learned locations.
+In addition, OPUS incorporates a suite of non-trivial strategies to enhance model performance, including coarse-to-fine learning, consistent point sampling, and adaptive re-weighting, etc.
+Finally, compared with current state-of-the-art methods, our lightest model achieves superior RayIoU on the Occ3D-nuScenes dataset at near $2\times$ FPS, while our heaviest model surpasses previous best results by 6.1 RayIoU. 
+
+## Method
+
+![method](demos/structure.png)
+
+## Model Zoo
+
+| Models                                          | Epochs |  *Q* | *P* | mIoU | RayIoU<sub>1m</sub> | RayIoU<sub>2m</sub> | RayIoU<sub>4m</sub> | RayIoU |  FPS | Link |
+|:-----------------------------------------------:|:------:|:----:|:---:|:----:|:-------------------:|:-------------------:|:-------------------:|:------:|:----:|:----:|
+| [OPUS-T](configs/opus-t_r50_704x256_8f_100e.py) |   100  | 600  | 128 | 33.2 |         31.7        |         39.2        |         44.3        |  38.4  | 22.4 |   -  |
+| [OPUS-S](configs/opus-s_r50_704x256_8f_100e.py) |   100  | 1200 | 64  | 34.2 |         32.6        |         39.9        |         44.7        |  39.1  | 20.7 |   -  |
+| [OPUS-M](configs/opus-m_r50_704x256_8f_100e.py) |   100  | 2400 | 32  | 35.6 |         33.7        |         41.1        |         46.0        |  40.3  | 13.4 |   -  |
+| [OPUS-L](configs/opus-l_r50_704x256_8f_100e.py) |   100  | 4800 | 16  | 36.2 |         34.7        |         42.1        |         46.7        |  41.2  |  7.2 |   -  |
+
+**note: *Q* means number queries. *P* means predicted points per query.**
+
+## Training and Evaluation
+
+### Environment
 
 We build OPS based on Pytorch 1.13.1 + CUDA 11.6
 ```
@@ -36,7 +83,7 @@ cd models/csrc
 python setup.py build_ext --inplace
 ```
 
-## Prepare Dataset
+### Prepare Dataset
 
 1. Download nuScenes from [https://www.nuscenes.org/nuscenes](https://www.nuscenes.org/nuscenes) and place it in folder `data/nuscenes`.
 
@@ -72,7 +119,7 @@ data/nuscenes
 
 Note: These `*.pkl` files can also be generated with our script: `gen_sweep_info.py`.
 
-## Training
+### Training
 
 Download pre-trained [weights](https://download.openmmlab.com/mmdetection3d/v0.1.0_models/nuimages_semseg/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth)
 provided by mmdet3d, and put them in directory `pretrain/`:
@@ -98,7 +145,7 @@ bash dist_train.sh 8 configs/ops-t_r50_704x256_8f_12e.py
 
 Note: The batch size for each GPU will be scaled automatically. So there is no need to modify the `batch_size` in configurations.
 
-## Evaluation
+### Evaluation
 
 Single-GPU evaluation:
 
@@ -113,3 +160,20 @@ Multi-GPU evaluation:
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 torchrun --nproc_per_node 8 val.py --config configs/ops-t_r50_704x256_8f_12e.py --weights path/to/checkpoints
 ```
+
+## Bibtex
+
+If this work is helpful for your research, please consider citing the following entry.
+
+```
+```
+
+## Ackknowledgement
+
+Our code is developed on top of following open source codebase:
+
+- [SparseBEV](https://github.com/MCG-NJU/SparseBEV)
+- [SparseOcc](https://github.com/MCG-NJU/SparseOcc)
+
+We sincerely appreciate their amazing works.
+
