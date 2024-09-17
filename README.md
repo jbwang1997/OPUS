@@ -14,11 +14,11 @@
 > [Qibin Hou#](https://houqb.github.io/),
 > [Ming-Ming Cheng](https://mmcheng.net/cmm/) \
 > (* Equal contribition, # Corresponding author)
-> - [Paper in arXiv]()
+> - [Paper in arXiv](https://arxiv.org/pdf/2409.09350)
 
 ## News
 
-- [2024/9/13]: We release an initial version of OPUS. It achieves promising performance of 41.2 RayIoU and 36.2 mIoU on the NuScene-Occ3D dataset.
+- [2024/9/17]: We release an initial version of OPUS. It achieves promising performance of 41.2 RayIoU and 36.2 mIoU on the NuScene-Occ3D dataset.
 
 ## Abstract
 Occupancy prediction, aiming at predicting the occupancy status within voxelized 3D environment, is quickly gaining momentum within the autonomous driving community.
@@ -38,10 +38,10 @@ Finally, compared with current state-of-the-art methods, our lightest model achi
 
 | Models                                          | Epochs |  *Q* | *P* | mIoU | RayIoU<sub>1m</sub> | RayIoU<sub>2m</sub> | RayIoU<sub>4m</sub> | RayIoU |  FPS | Link |
 |:-----------------------------------------------:|:------:|:----:|:---:|:----:|:-------------------:|:-------------------:|:-------------------:|:------:|:----:|:----:|
-| [OPUS-T](configs/opus-t_r50_704x256_8f_100e.py) |   100  | 600  | 128 | 33.2 |         31.7        |         39.2        |         44.3        |  38.4  | 22.4 |   -  |
-| [OPUS-S](configs/opus-s_r50_704x256_8f_100e.py) |   100  | 1200 | 64  | 34.2 |         32.6        |         39.9        |         44.7        |  39.1  | 20.7 |   -  |
-| [OPUS-M](configs/opus-m_r50_704x256_8f_100e.py) |   100  | 2400 | 32  | 35.6 |         33.7        |         41.1        |         46.0        |  40.3  | 13.4 |   -  |
-| [OPUS-L](configs/opus-l_r50_704x256_8f_100e.py) |   100  | 4800 | 16  | 36.2 |         34.7        |         42.1        |         46.7        |  41.2  |  7.2 |   -  |
+| [OPUS-T](configs/opus-t_r50_704x256_8f_100e.py) |   100  | 600  | 128 | 33.2 |         31.7        |         39.2        |         44.3        |  38.4  | 22.4 | [Model](https://drive.google.com/file/d/10-dOpejD7gQMYY8aDhrWUXtAEIWO1KZr/view?usp=sharing) |
+| [OPUS-S](configs/opus-s_r50_704x256_8f_100e.py) |   100  | 1200 | 64  | 34.2 |         32.6        |         39.9        |         44.7        |  39.1  | 20.7 | [Model](https://drive.google.com/file/d/1g1mkl3ij11wUQPDRjbftXw8cLd6lkBy7/view?usp=sharing) |
+| [OPUS-M](configs/opus-m_r50_704x256_8f_100e.py) |   100  | 2400 | 32  | 35.6 |         33.7        |         41.1        |         46.0        |  40.3  | 13.4 | [Model](https://drive.google.com/file/d/1leXwavqWHP0JdkeprB5ynNH8IttHRkQk/view?usp=sharing) |
+| [OPUS-L](configs/opus-l_r50_704x256_8f_100e.py) |   100  | 4800 | 16  | 36.2 |         34.7        |         42.1        |         46.7        |  41.2  |  7.2 | [Model](https://drive.google.com/file/d/17Ga2Uk1BPsLIq1tM1qxiK8LTX-GsKP39/view?usp=sharing) |
 
 **note: *Q* denotes query numbers. *P* is the number of predicted points per query.**
 
@@ -166,6 +166,12 @@ torchrun --nproc_per_node 8 val.py --config configs/ops-t_r50_704x256_8f_12e.py 
 If this work is helpful for your research, please consider citing the following entry.
 
 ```
+@article{wang2024opus,
+  title={Opus: occupancy prediction using a sparse set},
+  author={Wang, Jiabao and Liu, Zhaojiang and Meng, Qiang and Yan, Liujiang and Wang, Ke and Yang, Jie and Liu, Wei and Hou, Qibin and Cheng, Mingming}
+  journal={arXiv preprint arXiv:2409.09350},
+  year={2024}
+}
 ```
 
 ## Ackknowledgement
