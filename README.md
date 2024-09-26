@@ -1,6 +1,6 @@
 <div align="center">
 
-# OPUS: Occupancy Prediction Using a Sparse Set
+# OPUS: Occupancy Prediction Using a Sparse Set (Neurips 2024)
 </div>
 
 ![demo](demos/teaser.png)
@@ -18,7 +18,8 @@
 
 ## News
 
-- [2024/9/17]: We release an initial version of OPUS. It achieves promising performance of 41.2 RayIoU and 36.2 mIoU on the NuScene-Occ3D dataset.
+- [2024/09/26]: OPUS is accepeted by Neurips 2024 :rocket: :rocket: :rocket: .
+- [2024/09/17]: We release an initial version of OPUS. It achieves promising performance of 41.2 RayIoU and 36.2 mIoU on the NuScene-Occ3D dataset.
 
 ## Abstract
 Occupancy prediction, aiming at predicting the occupancy status within voxelized 3D environment, is quickly gaining momentum within the autonomous driving community.
@@ -166,10 +167,10 @@ torchrun --nproc_per_node 8 val.py --config configs/opus-t_r50_704x256_8f_12e.py
 If this work is helpful for your research, please consider citing the following entry.
 
 ```
-@article{wang2024opus,
+@inproceedings{wang2024opus,
   title={Opus: occupancy prediction using a sparse set},
   author={Wang, Jiabao and Liu, Zhaojiang and Meng, Qiang and Yan, Liujiang and Wang, Ke and Yang, Jie and Liu, Wei and Hou, Qibin and Cheng, Mingming}
-  journal={arXiv preprint arXiv:2409.09350},
+  booktitle={Advances in Neural Information Processing Systems},
   year={2024}
 }
 ```
