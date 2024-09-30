@@ -1,6 +1,6 @@
 <div align="center">
 
-# OPUS: Occupancy Prediction Using a Sparse Set (Neurips 2024)
+# OPUS: Occupancy Prediction Using a Sparse Set (NeurIPS 2024)
 </div>
 
 ![demo](demos/teaser.png)
@@ -18,7 +18,7 @@
 
 ## News
 
-- [2024/09/26]: OPUS is accepeted by Neurips 2024 :rocket: :rocket: :rocket: .
+- [2024/09/26]: OPUS is accepeted by NeurIPS 2024 :rocket: :rocket: :rocket: .
 - [2024/09/17]: We release an initial version of OPUS. It achieves promising performance of 41.2 RayIoU and 36.2 mIoU on the NuScene-Occ3D dataset.
 
 ## Abstract
