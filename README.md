@@ -14,7 +14,7 @@
 > [Qibin Hou#](https://houqb.github.io/),
 > [Ming-Ming Cheng](https://mmcheng.net/cmm/) \
 > (* Equal contribition, # Corresponding author)
-> - [Paper in arXiv](https://arxiv.org/pdf/2409.09350)
+> - [Paper in arXiv](https://arxiv.org/pdf/2409.09350) | [知乎](https://zhuanlan.zhihu.com/p/721102233)
 
 ## News
 
