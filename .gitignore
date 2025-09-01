@@ -42,6 +42,24 @@ downloads
 .vscode
 pyrightconfig.json
 
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# Claude Code
+.claude/
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
 # Custom
 data
 outputs
