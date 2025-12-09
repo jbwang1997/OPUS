@@ -506,13 +506,13 @@ pretrain
 Train OPUS with a single GPU:
 
 ```
-python train.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py
+python scripts/train.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py
 ```
 
 Train OPUS with 8 GPUs:
 
 ```
-bash dist_train.sh 8 configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py
+bash scripts/dist_train.sh 8 configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py
 ```
 
 Note: The batch size for each GPU will be scaled automatically. So there is no need to modify the `batch_size` in configurations.
@@ -523,26 +523,26 @@ Single-GPU evaluation:
 
 ```
 export CUDA_VISIBLE_DEVICES=0
-python val.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints
+python scripts/val.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints
 ```
 
 Multi-GPU evaluation:
 
 ```
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-bash dist_val.sh 8 configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints
+bash scripts/dist_val.sh 8 configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints
 ```
 
 ### Visualization
 
 Visualizing results
 ```
-python visualize.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints
+python scripts/visualize.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints
 ```
 
 Visualizing inputs and ground-truths
 ```
-python visualize.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints --vis-input --vis-gt
+python scripts/visualize.py --config configs/opusv1_nusc-occ3d/opusv1-t_r50_704x256_8f_nusc-occ3d_100e.py --weights path/to/checkpoints --vis-input --vis-gt
 ```
 
 ## Bibtex
