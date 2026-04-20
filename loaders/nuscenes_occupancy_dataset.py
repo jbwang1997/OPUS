@@ -21,51 +21,51 @@ class NuScenesOccupancyDataset(NuScenesDataset):
         super().__init__(filter_empty_gt=False, *args, **kwargs)
         self.data_infos = self.load_annotations(self.ann_file)
     
-    def collect_cam_sweeps(self, index, into_past=150, into_future=0):
+    def collect_cam_sweeps(self, index, into_past=75, into_future=75):
+        scene_name = self.data_infos[index]['scene_name']
+
         all_sweeps_prev = []
-        curr_index = index
-        while len(all_sweeps_prev) < into_past:
-            curr_sweeps = self.data_infos[curr_index]['cam_sweeps']
-            if len(curr_sweeps) == 0:
+        curr_index = index - 1
+        all_sweeps_prev.extend(self.data_infos[index]['cam_sweeps'])
+        while len(all_sweeps_prev) < into_past and curr_index >= 0:
+            if self.data_infos[curr_index]['scene_name'] != scene_name:
                 break
-            all_sweeps_prev.extend(curr_sweeps)
-            all_sweeps_prev.append(self.data_infos[curr_index - 1]['cams'])
+            all_sweeps_prev.append(self.data_infos[curr_index]['cams'])
+            all_sweeps_prev.extend(self.data_infos[curr_index]['cam_sweeps'])
             curr_index = curr_index - 1
         
         all_sweeps_next = []
         curr_index = index + 1
-        while len(all_sweeps_next) < into_future:
-            if curr_index >= len(self.data_infos):
+        while len(all_sweeps_next) < into_future and curr_index < len(self.data_infos):
+            if self.data_infos[curr_index]['scene_name'] != scene_name:
                 break
-            curr_sweeps = self.data_infos[curr_index]['cam_sweeps']
-            all_sweeps_next.extend(curr_sweeps[::-1])
+            all_sweeps_next.extend(self.data_infos[curr_index]['cam_sweeps'][::-1])
             all_sweeps_next.append(self.data_infos[curr_index]['cams'])
             curr_index = curr_index + 1
 
         return all_sweeps_prev, all_sweeps_next
 
-    def collect_lidar_sweeps(self, index, into_past=20, into_future=0):
+    def collect_lidar_sweeps(self, index, into_past=20, into_future=20):
+        scene_name = self.data_infos[index]['scene_name']
+
         all_sweeps_prev = []
-        curr_index = index
-        while len(all_sweeps_prev) < into_past:
-            curr_sweeps = self.data_infos[curr_index]['lidar_sweeps']
-            if len(curr_sweeps) == 0:
+        curr_index = index - 1
+        all_sweeps_prev.extend(self.data_infos[index]['lidar_sweeps'])
+        while len(all_sweeps_prev) < into_past and curr_index >= 0:
+            if self.data_infos[curr_index]['scene_name'] != scene_name:
                 break
-            all_sweeps_prev.extend(curr_sweeps)
+            all_sweeps_prev.append(self.data_infos[curr_index]['lidar'])
+            all_sweeps_prev.extend(self.data_infos[curr_index]['lidar_sweeps'])
             curr_index = curr_index - 1
         
         all_sweeps_next = []
         curr_index = index + 1
-        last_timestamp = self.data_infos[index]['timestamp']
-        while len(all_sweeps_next) < into_future:
-            if curr_index >= len(self.data_infos):
+        while len(all_sweeps_next) < into_future and curr_index < len(self.data_infos):
+            if self.data_infos[curr_index]['scene_name'] != scene_name:
                 break
-            curr_sweeps = self.data_infos[curr_index]['lidar_sweeps'][::-1]
-            if curr_sweeps[0]['timestamp'] == last_timestamp:
-                curr_sweeps = curr_sweeps[1:]
-            all_sweeps_next.extend(curr_sweeps)
+            all_sweeps_next.extend(self.data_infos[curr_index]['lidar_sweeps'][::-1])
+            all_sweeps_next.append(self.data_infos[curr_index]['lidar'])
             curr_index = curr_index + 1
-            last_timestamp = all_sweeps_next[-1]['timestamp']
 
         return all_sweeps_prev, all_sweeps_next
 
@@ -99,7 +99,9 @@ class NuScenesOccupancyDataset(NuScenesDataset):
         if self.modality['use_lidar']:
             lidar_sweeps_prev, lidar_sweeps_next = self.collect_lidar_sweeps(index)
             input_dict.update(dict(
-                pts_filename=info['lidar_path'],
+                pts_filename=info['lidar']['data_path'],
+                lidar2global_rotation=info['lidar']['sensor2global_rotation'],
+                lidar2global_translation=info['lidar']['sensor2global_translation'],
                 lidar_sweeps={'prev': lidar_sweeps_prev, 'next': lidar_sweeps_next},
             ))
 
@@ -108,7 +110,10 @@ class NuScenesOccupancyDataset(NuScenesDataset):
             img_timestamps = []
             ego2img = []
 
-            for _, cam_info in info['cams'].items():
+            cam_types = ['CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
+                         'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
+            for cam in cam_types:
+                cam_info = info['cams'][cam]
                 img_paths.append(os.path.relpath(cam_info['data_path']))
                 img_timestamps.append(cam_info['timestamp'] / 1e6)
                 ego2img.append(
@@ -116,7 +121,7 @@ class NuScenesOccupancyDataset(NuScenesDataset):
                         ego2global_translation,
                         ego2global_rotation_mat,
                         cam_info['sensor2global_translation'],
-                        cam_info['sensor2global_rotation'].T,
+                        cam_info['sensor2global_rotation'],
                         cam_info['cam_intrinsic']
                     )
                 )

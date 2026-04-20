@@ -506,16 +506,13 @@ python setup.py build_ext --inplace
 
 3. (Optional) Download Occ3d-OpenOccupancy from the [link](https://github.com/JeffWang987/OpenOccupancy/blob/main/docs/prepare_data.md) and place it in `data/nuscenes/occupancy`
 
-4. Prepare data with scripts provided by mmdet3d:
+4. Prepare data with the script provided by OPUS.
+(**Important**: The original scripts provided by MMDetection3D and SparseBEV has been obsoleted.
+Users must regenerate .pkl files using the new script to ensure the data format correct.
+)
 
 ```
-mim run mmdet3d create_data nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes
-```
-
-4. Perform data preparation for OPUS:
-
-```
-python gen_sweep_info.py
+python scripts/preprocess_nuscenes.py
 ```
 
 The final folder structure would be
@@ -523,11 +520,8 @@ The final folder structure would be
 ```
 data/nuscenes
 ├── maps
-├── nuscenes_infos_test_sweep.pkl
 ├── nuscenes_infos_train_sweep.pkl
-├── nuscenes_infos_train_mini_sweep.pkl
 ├── nuscenes_infos_val_sweep.pkl
-├── nuscenes_infos_val_mini_sweep.pkl
 ├── samples
 ├── sweeps
 ├── gts       % Occ3D dataset (Optional)

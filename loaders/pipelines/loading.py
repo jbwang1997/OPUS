@@ -87,6 +87,7 @@ class LoadMultiViewImageFromMultiSweeps:
                  color_type='color',
                  test_mode=False,
                  train_interval=[4, 8],
+                 only_keyframe=False,
                  test_interval=6,
                  force_offline=False):
         self.sweeps_num = sweeps_num
@@ -96,6 +97,7 @@ class LoadMultiViewImageFromMultiSweeps:
 
         self.train_interval = train_interval
         self.test_interval = test_interval
+        self.only_keyframe = only_keyframe
 
         try:
             mmcv.use_backend('turbojpeg')
@@ -116,7 +118,13 @@ class LoadMultiViewImageFromMultiSweeps:
                     results['filename'].append(results['filename'][j])
                     results['ego2img'].append(np.copy(results['ego2img'][j]))
         else:
-            if self.test_mode:
+            if self.only_keyframe:
+                sweeps = results['cam_sweeps']['prev']
+                index = [i for i in range(len(sweeps)) if sweeps[i]['CAM_FRONT']['is_key_frame']]
+                if len(index) < self.sweeps_num:
+                    index = index + [index[-1]] * (self.sweeps_num - len(index))
+                choice = index[:self.sweeps_num]
+            elif self.test_mode:
                 interval = self.test_interval
                 choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
             elif len(results['cam_sweeps']['prev']) <= self.sweeps_num:
@@ -145,7 +153,7 @@ class LoadMultiViewImageFromMultiSweeps:
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'].T,
+                        sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
@@ -168,8 +176,15 @@ class LoadMultiViewImageFromMultiSweeps:
                     results['filename'].append(results['filename'][j])
                     results['ego2img'].append(np.copy(results['ego2img'][j]))
         else:
-            interval = self.test_interval
-            choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
+            if self.only_keyframe:
+                sweeps = results['cam_sweeps']['prev']
+                index = [i for i in range(len(sweeps)) if sweeps[i]['CAM_FRONT']['is_key_frame']]
+                if len(index) < self.sweeps_num:
+                    index = index + [index[-1]] * (self.sweeps_num - len(index))
+                choice = index[:self.sweeps_num]
+            else:
+                interval = self.test_interval
+                choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
 
             for idx in sorted(list(choices)):
                 sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
@@ -186,7 +201,7 @@ class LoadMultiViewImageFromMultiSweeps:
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'].T,
+                        sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
@@ -265,7 +280,7 @@ class LoadMultiViewImageFromMultiSweepsFuture:
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'].T,
+                        sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
@@ -295,7 +310,7 @@ class LoadMultiViewImageFromMultiSweepsFuture:
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'].T,
+                        sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
@@ -380,7 +395,7 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'].T,
+                        sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
@@ -410,7 +425,7 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'].T,
+                        sweep[sensor]['sensor2global_rotation'],
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
@@ -549,6 +564,9 @@ class LoadPointsFromMultiSweeps:
         sweep_points_list = [points]
         ts = results['timestamp']
         sweeps = results['lidar_sweeps']['prev']
+        l2g_r = results['lidar2global_rotation']
+        l2g_t = results['lidar2global_translation']
+
         if self.pad_empty_sweeps and len(sweeps) == 0:
             for i in range(self.sweeps_num):
                 if self.remove_close:
@@ -567,10 +585,14 @@ class LoadPointsFromMultiSweeps:
                 points_sweep = np.copy(points_sweep).reshape(-1, self.load_dim)
                 if self.remove_close:
                     points_sweep = self._remove_close(points_sweep)
+
+                s2g_r = sweep['sensor2global_rotation']
+                s2g_t = sweep['sensor2global_translation']
+                s2l_r = l2g_r.T @ s2g_r
+                s2l_t = (s2g_t - l2g_t) @ l2g_r
+                points_sweep[:, :3] = points_sweep[:, :3] @ s2l_r.T + s2l_t
+
                 sweep_ts = sweep['timestamp'] / 1e6
-                points_sweep[:, :3] = points_sweep[:, :3] @ sweep[
-                    'sensor2lidar_rotation'].T
-                points_sweep[:, :3] += sweep['sensor2lidar_translation']
                 points_sweep[:, self.time_dim] = ts - sweep_ts
                 points_sweep = points.new_point(points_sweep)
                 sweep_points_list.append(points_sweep)

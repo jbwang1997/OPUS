@@ -30,7 +30,7 @@ name_mapper = {
 }
 
 
-def create_nuscenes_infos(root_path, max_lidar_sweeps=10):
+def create_nuscenes_infos(root_path):
     nusc = NuScenes(version='v1.0-trainval', dataroot=root_path, verbose=True)
     scene_token_mapper = {s['name']: s['token'] for s in nusc.scene}
     train_scenes = [scene_token_mapper[n] for n in splits.train]
@@ -45,7 +45,7 @@ def create_nuscenes_infos(root_path, max_lidar_sweeps=10):
                     scene_name=scene['name'],
                     scene_token=scene['token'])
 
-        fill_lidar_info(info, nusc, sample, max_lidar_sweeps)
+        fill_lidar_info(info, nusc, sample)
         fill_cam_info(info, nusc, sample)
         fill_ann_info(info, nusc, sample)
 
@@ -55,65 +55,58 @@ def create_nuscenes_infos(root_path, max_lidar_sweeps=10):
             val_infos.append(info)
 
     print('train sample: {}, val sample: {}'.format(len(train_infos), len(val_infos)))
-    metadata = dict(version='v1.0-trainval')
+    metadata = dict(version='v1.0_trainval')
 
     train_data = dict(infos=train_infos, metadata=metadata)
-    info_path = osp.join(root_path, 'nuscenes_infos_train_sweep2.pkl')
+    info_path = osp.join(root_path, 'nuscenes_infos_train_sweep.pkl')
     with open(info_path, 'wb') as f:
         pickle.dump(train_data, f)
 
     val_data = dict(infos=val_infos, metadata=metadata)
-    info_path = osp.join(root_path, 'nuscenes_infos_val_sweep2.pkl')
+    info_path = osp.join(root_path, 'nuscenes_infos_val_sweep.pkl')
     with open(info_path, 'wb') as f:
         pickle.dump(val_data, f)
 
 
-def fill_lidar_info(info, nusc, sample, max_sweeps):
+def fill_lidar_info(info, nusc, sample):
     lidar_token = sample['data']['LIDAR_TOP']
     sd_rec = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
     cs_record = nusc.get('calibrated_sensor', sd_rec['calibrated_sensor_token'])
     pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
     lidar_path = str(nusc.get_sample_data_path(sd_rec['token']))
 
-    l2e_r = cs_record['rotation']
-    l2e_t = cs_record['translation']
-    e2g_r = pose_record['rotation']
-    e2g_t = pose_record['translation']
-    l2e_r_mat = Quaternion(l2e_r).rotation_matrix
-    e2g_r_mat = Quaternion(e2g_r).rotation_matrix
+    info['lidar2ego_rotation'] = cs_record['rotation']
+    info['lidar2ego_translation'] = cs_record['translation']
+    info['ego2global_rotation'] = pose_record['rotation']
+    info['ego2global_translation'] = pose_record['translation']
+    info['timestamp'] = sample['timestamp']
+
+    lidar_sweep = get_lidar_sweep(nusc, sd_rec)
+    lidar_sweep['is_key_frame'] = True
+    info['lidar'] = lidar_sweep
 
     sweeps = []
-    while len(sweeps) < max_sweeps:
-        if not sd_rec['prev'] == '':
-            sweep = get_lidar_sweep(nusc, sd_rec['prev'], l2e_t,
-                                    l2e_r_mat, e2g_t, e2g_r_mat)
-            sweeps.append(sweep)
-            sd_rec = nusc.get('sample_data', sd_rec['prev'])
-        else:
+    while sd_rec['prev'] != '':
+        sd_rec = nusc.get('sample_data', sd_rec['prev'])
+        if sd_rec['is_key_frame']:
             break
-
-    info.update({
-        'lidar_path': lidar_path,
-        'lidar_sweeps': sweeps,
-        'lidar2ego_translation': l2e_t,
-        'lidar2ego_rotation': l2e_r,
-        'ego2global_translation': e2g_t,
-        'ego2global_rotation': e2g_r,
-        'timestamp': sample['timestamp']
-    })
+        lidar_sweep = get_lidar_sweep(nusc, sd_rec)
+        lidar_sweep['is_key_frame'] = False
+        sweeps.append(lidar_sweep)
+    info['lidar_sweeps'] = sweeps
 
 
 def fill_cam_info(info, nusc, sample):
     cam_types = [
-        'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT',
-        'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_FRONT_LEFT'
+        'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
+        'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
     ]
 
     info['cams'] = dict()
     for cam in cam_types:
         sample_data = nusc.get('sample_data', sample['data'][cam])
-        sweep_cam = get_cam_sweep(nusc, sample_data)
-        sweep_cam['type'] = cam
+        sweep_cam = get_cam_sweep(nusc, sample_data, cam)
+        sweep_cam['is_key_frame'] = True
         info['cams'][cam] = sweep_cam
 
     curr_cams = dict()
@@ -129,8 +122,8 @@ def fill_cam_info(info, nusc, sample):
                     sweep_info = sweep_infos[-1] 
                     break
                 sample_data = nusc.get('sample_data', curr_cams[cam]['prev'])
-                sweep_cam = get_cam_sweep(nusc, sample_data)
-                sweep_cam['type'] = cam
+                sweep_cam = get_cam_sweep(nusc, sample_data, cam)
+                sweep_cam['is_key_frame'] = False
                 curr_cams[cam] = sample_data
                 sweep_info[cam] = sweep_cam
             sweep_infos.append(sweep_info)
@@ -183,43 +176,30 @@ def fill_ann_info(info, nusc, sample):
     info['identity'] = identity
 
 
-def get_lidar_sweep(nusc, sensor_token, l2e_t, l2e_r_mat, e2g_t, e2g_r_mat):
-    sd_rec = nusc.get('sample_data', sensor_token)
-    cs_record = nusc.get('calibrated_sensor',
-                         sd_rec['calibrated_sensor_token'])
+def get_lidar_sweep(nusc, sd_rec):
+    cs_record = nusc.get('calibrated_sensor', sd_rec['calibrated_sensor_token'])
     pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
     data_path = str(nusc.get_sample_data_path(sd_rec['token']))
-    sweep = {
-        'data_path': data_path,
+
+    sensor2ego_translation = cs_record['translation']
+    ego2global_translation = pose_record['translation']
+    sensor2ego_rotation = Quaternion(cs_record['rotation']).rotation_matrix
+    ego2global_rotation = Quaternion(pose_record['rotation']).rotation_matrix
+
+    sensor2global_rotation = ego2global_rotation @ sensor2ego_rotation
+    sensor2global_translation = sensor2ego_translation @ ego2global_rotation.T + ego2global_translation
+
+    return {
         'type': 'LIDAR_TOP',
+        'data_path': data_path,
         'sample_data_token': sd_rec['token'],
-        'sensor2ego_translation': cs_record['translation'],
-        'sensor2ego_rotation': cs_record['rotation'],
-        'ego2global_translation': pose_record['translation'],
-        'ego2global_rotation': pose_record['rotation'],
+        'sensor2global_rotation': sensor2global_rotation,
+        'sensor2global_translation': sensor2global_translation,
         'timestamp': sd_rec['timestamp']
     }
-    l2e_r_s = sweep['sensor2ego_rotation']
-    l2e_t_s = sweep['sensor2ego_translation']
-    e2g_r_s = sweep['ego2global_rotation']
-    e2g_t_s = sweep['ego2global_translation']
-
-    # obtain the RT from sensor to Top LiDAR
-    # sweep->ego->global->ego'->lidar
-    l2e_r_s_mat = Quaternion(l2e_r_s).rotation_matrix
-    e2g_r_s_mat = Quaternion(e2g_r_s).rotation_matrix
-    R = (l2e_r_s_mat.T @ e2g_r_s_mat.T) @ (
-        np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
-    T = (l2e_t_s @ e2g_r_s_mat.T + e2g_t_s) @ (
-        np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
-    T -= e2g_t @ (np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T
-                  ) + l2e_t @ np.linalg.inv(l2e_r_mat).T
-    sweep['sensor2lidar_rotation'] = R.T  # points @ R.T + T
-    sweep['sensor2lidar_translation'] = T
-    return sweep
 
 
-def get_cam_sweep(nusc, sample_data):
+def get_cam_sweep(nusc, sample_data, cam_type):
     pose_record = nusc.get('ego_pose', sample_data['ego_pose_token'])
     cs_record = nusc.get('calibrated_sensor', sample_data['calibrated_sensor_token'])
     
@@ -229,10 +209,11 @@ def get_cam_sweep(nusc, sample_data):
     ego2global_rotation = Quaternion(pose_record['rotation']).rotation_matrix
     cam_intrinsic = np.array(cs_record['camera_intrinsic'])
 
-    sensor2global_rotation = sensor2ego_rotation.T @ ego2global_rotation.T
+    sensor2global_rotation = ego2global_rotation @ sensor2ego_rotation
     sensor2global_translation = sensor2ego_translation @ ego2global_rotation.T + ego2global_translation
 
     return {
+        'type': cam_type,
         'data_path': nusc.get_sample_data_path(sample_data['token']),
         'sensor2global_rotation': sensor2global_rotation,
         'sensor2global_translation': sensor2global_translation,
@@ -244,6 +225,5 @@ def get_cam_sweep(nusc, sample_data):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-root', default='data/nuscenes')
-    parser.add_argument('--max-lidar-sweeps', default=10, type=int)
     args = parser.parse_args()
-    create_nuscenes_infos(args.data_root, args.max_lidar_sweeps)
+    create_nuscenes_infos(args.data_root)

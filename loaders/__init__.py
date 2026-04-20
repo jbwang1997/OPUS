@@ -1,4 +1,3 @@
 from .pipelines import __all__
-from .nuscenes_dataset import CustomNuScenesDataset
 from .nuscenes_occ3d_dataset import NuScenesOcc3DDataset
 from .nuscenes_occupancy_dataset import NuScenesOccupancyDataset
