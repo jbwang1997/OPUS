@@ -154,43 +154,26 @@ ida_aug_conf = {
 }
 
 train_pipeline = [
-    dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1),
-    dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=5, use_dim=5),
-    dict(type='LoadPointsFromMultiSweeps', sweeps_num=9, use_dim=[0, 1, 2, 3, 4],
-         pad_empty_sweeps=True, remove_close=True),
-    dict(type='LiDARToOccSpace'),
-    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1),
+    dict(type='LoadPointsWithSweeps', prev_sweeps_num=9, load_dim=5, use_dim=5, 
+         tgt_coord_system='occ', pad_empty_sweeps=True, remove_close=True),
     dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
-    dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
-    dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
-    dict(type='DefaultFormatBundle3D', class_names=object_names),
-    dict(type='Collect3D', keys=['img', 'points', 'voxel_semantics', 'mask_camera'], meta_keys=(
-        'filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
+    dict(type='FinalFormatting', keys=['img', 'points', 'voxel_semantics', 'mask_camera'],
+         meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ', 
+                    'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 test_pipeline = [
-    dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True),
-    dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=5, use_dim=5),
-    dict(type='LoadPointsFromMultiSweeps', sweeps_num=9, use_dim=[0, 1, 2, 3, 4],
-         pad_empty_sweeps=True, remove_close=True),
-    dict(type='LiDARToOccSpace'),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1, test_mode=True),
+    dict(type='LoadPointsWithSweeps', prev_sweeps_num=9, load_dim=5, use_dim=5,
+         tgt_coord_system='occ', pad_empty_sweeps=True, remove_close=True),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
-    dict(
-        type='MultiScaleFlipAug3D',
-        img_scale=(1600, 900),
-        pts_scale_ratio=1,
-        flip=False,
-        transforms=[
-            dict(type='DefaultFormatBundle3D', class_names=object_names, with_label=False),
-            dict(type='Collect3D', keys=['img', 'points'], meta_keys=(
-                'filename', 'box_type_3d', 'ori_shape', 'img_shape', 'pad_shape',
-                'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
-        ])
+    dict(type='FinalFormatting', test_mode=True, keys=['img', 'points'],
+         meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
+                    'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 data = dict(

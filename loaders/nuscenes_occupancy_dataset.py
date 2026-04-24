@@ -90,48 +90,23 @@ class NuScenesOccupancyDataset(NuScenesDataset):
             ego2lidar=ego2lidar,
             ego2obj=ego2lidar,
             ego2occ=ego2lidar,
-            ego2global_translation=ego2global_translation,
+            ego2global_translation=np.array(ego2global_translation),
             ego2global_rotation=ego2global_rotation_mat,
-            lidar2ego_translation=lidar2ego_translation,
+            lidar2ego_translation=np.array(lidar2ego_translation),
             lidar2ego_rotation=lidar2ego_rotation_mat,
         )
 
         if self.modality['use_lidar']:
             lidar_sweeps_prev, lidar_sweeps_next = self.collect_lidar_sweeps(index)
             input_dict.update(dict(
-                pts_filename=info['lidar']['data_path'],
-                lidar2global_rotation=info['lidar']['sensor2global_rotation'],
-                lidar2global_translation=info['lidar']['sensor2global_translation'],
+                lidar_info=info['lidar'],
                 lidar_sweeps={'prev': lidar_sweeps_prev, 'next': lidar_sweeps_next},
             ))
 
         if self.modality['use_camera']:
-            img_paths = []
-            img_timestamps = []
-            ego2img = []
-
-            cam_types = ['CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
-                         'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
-            for cam in cam_types:
-                cam_info = info['cams'][cam]
-                img_paths.append(os.path.relpath(cam_info['data_path']))
-                img_timestamps.append(cam_info['timestamp'] / 1e6)
-                ego2img.append(
-                    compose_ego2img(
-                        ego2global_translation,
-                        ego2global_rotation_mat,
-                        cam_info['sensor2global_translation'],
-                        cam_info['sensor2global_rotation'],
-                        cam_info['cam_intrinsic']
-                    )
-                )
-
             cam_sweeps_prev, cam_sweeps_next = self.collect_cam_sweeps(index)
-
             input_dict.update(dict(
-                img_filename=img_paths,
-                img_timestamp=img_timestamps,
-                ego2img=ego2img,
+                cam_info=info['cams'],
                 cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
             ))
 

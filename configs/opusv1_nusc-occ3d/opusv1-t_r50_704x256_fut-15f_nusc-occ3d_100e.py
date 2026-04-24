@@ -28,15 +28,17 @@ occ_names = [
 point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 voxel_size = [0.4, 0.4, 0.4]
 
+# frame
+prev_frames = 7
+next_frames = 7
+
 # arch config
 embed_dims = 256
-num_layers = 5
-num_query = 1200
-num_frames = 8
+num_layers = 6
+num_query = 600
 num_levels = 4
-num_points = 2
-num_refines = [4, 8, 16, 32, 64]
-num_pt_channels = 32
+num_points = 4
+num_refines = [1, 4, 16, 32, 64, 128]
 
 img_backbone = dict(
     type='ResNet',
@@ -59,7 +61,7 @@ img_norm_cfg = dict(
     to_rgb=True)
 
 model = dict(
-    type='OPUSV2',
+    type='OPUSV1',
     use_grid_mask=False,
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
@@ -69,21 +71,21 @@ model = dict(
     img_backbone=img_backbone,
     img_neck=img_neck,
     pts_bbox_head=dict(
-        type='OPUSV2Head',
+        type='OPUSV1Head',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
         transformer=dict(
-            type='OPUSV2Transformer',
+            type='OPUSV1Transformer',
             embed_dims=embed_dims,
-            num_frames=num_frames,
+            num_frames=1+prev_frames+next_frames,
             num_points=num_points,
             num_layers=num_layers,
             num_levels=num_levels,
+            num_classes=len(occ_names),
             num_refines=num_refines,
-            num_pt_channels=num_pt_channels,
             scales=[0.5],
             pc_range=point_cloud_range),
         loss_cls=dict(
@@ -100,7 +102,10 @@ model = dict(
             )
         ),
     test_cfg=dict(
-        pts=dict(score_thr=0.25)
+        pts=dict(
+            score_thr=0.5,
+            padding=True
+        )
     )
 )
 
@@ -113,23 +118,19 @@ ida_aug_conf = {
     'rand_flip': True,
 }
 
-bda_aug_conf = {
-    'flip_dx_ratio': 0.5,
-    'flip_dy_ratio': 0.5,
-}
-
 train_pipeline = [
-    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=prev_frames,
+         next_sweeps_num=next_frames),
     dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
-    dict(type='RandomTransformOcc', bda_aug_conf=bda_aug_conf),
     dict(type='FinalFormatting', keys=['img', 'voxel_semantics', 'mask_camera'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
                     'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 test_pipeline = [
-    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1, test_mode=True),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=prev_frames, 
+         next_sweeps_num=next_frames, test_mode=True),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(type='FinalFormatting', test_mode=True, keys=['img'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
@@ -193,7 +194,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 100
-batch_size = 8
+batch_size = 1
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'

@@ -119,35 +119,21 @@ bda_aug_conf = {
 }
 
 train_pipeline = [
-    dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1),
-    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1),
     dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
-    dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
-    dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='RandomTransformOcc', bda_aug_conf=bda_aug_conf),
-    dict(type='DefaultFormatBundle3D', class_names=object_names),
-    dict(type='Collect3D', keys=['img', 'voxel_semantics', 'mask_camera'], meta_keys=(
-        'filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ', 'ego2img',
-        'ego2lidar', 'img_timestamp'))
+    dict(type='FinalFormatting', keys=['img', 'voxel_semantics', 'mask_camera'],
+         meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
+                    'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 test_pipeline = [
-    dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1, test_mode=True),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
-    dict(
-        type='MultiScaleFlipAug3D',
-        img_scale=(1600, 900),
-        pts_scale_ratio=1,
-        flip=False,
-        transforms=[
-            dict(type='DefaultFormatBundle3D', class_names=object_names, with_label=False),
-            dict(type='Collect3D', keys=['img'], meta_keys=(
-                'filename', 'box_type_3d', 'ori_shape', 'img_shape', 'pad_shape',
-                'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
-        ])
+    dict(type='FinalFormatting', test_mode=True, keys=['img'],
+         meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
+                    'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 data = dict(
@@ -207,7 +193,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 100
-batch_size = 1
+batch_size = 8
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'

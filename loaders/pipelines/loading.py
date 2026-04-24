@@ -6,8 +6,6 @@ import os.path as osp
 from mmdet3d.datasets.builder import PIPELINES
 from numpy.linalg import inv
 from mmcv.runner import get_dist_info
-from mmdet3d.core.points import BasePoints
-from ..utils import compose_ego2img
 
 
 @PIPELINES.register_module()
@@ -81,435 +79,172 @@ class LoadOccupancyFromFile:
 
 
 @PIPELINES.register_module()
-class LoadMultiViewImageFromMultiSweeps:
+class LoadMVImageWithSweeps:
     def __init__(self,
-                 sweeps_num=5,
+                 prev_sweeps_num=0,
+                 next_sweeps_num=0,
                  color_type='color',
-                 test_mode=False,
-                 train_interval=[4, 8],
+                 interval=[4, 8],
                  only_keyframe=False,
-                 test_interval=6,
+                 order='temporal',
+                 test_mode=False,
                  force_offline=False):
-        self.sweeps_num = sweeps_num
+        self.prev_sweeps_num = prev_sweeps_num
+        self.next_sweeps_num = next_sweeps_num
         self.color_type = color_type
-        self.test_mode = test_mode
-        self.force_offline = force_offline
-
-        self.train_interval = train_interval
-        self.test_interval = test_interval
+        self.interval = interval if isinstance(interval, list) else [interval, interval]
         self.only_keyframe = only_keyframe
+        self.force_offline = force_offline
+        self.test_mode = test_mode
+
+        self.order = order
+        assert self.order in ['temporal', 'interleave']
+        if self.order == 'interleave':
+            assert self.prev_sweeps_num == self.next_sweeps_num
+
+        self.cam_types = [
+            'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
+            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
+        ]
 
         try:
             mmcv.use_backend('turbojpeg')
         except ImportError:
             mmcv.use_backend('cv2')
+    
+    def compose_ego2img(self, results, info):
+        ego2global_t = results['ego2global_translation']
+        ego2global_r = results['ego2global_rotation']
+        sensor2global_t = info['sensor2global_translation']
+        sensor2global_r = info['sensor2global_rotation']
+        intrinsic = info['cam_intrinsic']
 
-    def load_offline(self, results):
-        cam_types = [
-            'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
-            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
-        ]
+        R = np.linalg.inv(sensor2global_r) @ ego2global_r
+        T = (ego2global_t - sensor2global_t) @ sensor2global_r
 
-        if len(results['cam_sweeps']['prev']) == 0:
-            for _ in range(self.sweeps_num):
-                for j in range(len(cam_types)):
-                    results['img'].append(results['img'][j])
-                    results['img_timestamp'].append(results['img_timestamp'][j])
-                    results['filename'].append(results['filename'][j])
-                    results['ego2img'].append(np.copy(results['ego2img'][j]))
+        ego2cam_rt = np.eye(4)
+        ego2cam_rt[:3, :3] = R
+        ego2cam_rt[:3, 3] = T.T
+
+        viewpad = np.eye(4)
+        viewpad[:intrinsic.shape[0], :intrinsic.shape[1]] = intrinsic
+        ego2img = (viewpad @ ego2cam_rt).astype(np.float32)
+
+        return ego2img
+    
+    def extract_info(self, results, data):
+        filename, img_timestamp, ego2img = [], [], []
+        for cam_type in self.cam_types:
+            filename.append(data[cam_type]['data_path'])
+            img_timestamp.append(data[cam_type]['timestamp'] / 1e6)
+            ego2img.append(self.compose_ego2img(results, data[cam_type]))
+        return dict(filename=filename, img_timestamp=img_timestamp, ego2img=ego2img)
+    
+    def padding(self, index, tgt_len):
+        if len(index) == 0:
+            return [-1 for _ in range(tgt_len)]
         else:
-            if self.only_keyframe:
-                sweeps = results['cam_sweeps']['prev']
-                index = [i for i in range(len(sweeps)) if sweeps[i]['CAM_FRONT']['is_key_frame']]
-                if len(index) < self.sweeps_num:
-                    index = index + [index[-1]] * (self.sweeps_num - len(index))
-                choice = index[:self.sweeps_num]
-            elif self.test_mode:
-                interval = self.test_interval
-                choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
-            elif len(results['cam_sweeps']['prev']) <= self.sweeps_num:
-                pad_len = self.sweeps_num - len(results['cam_sweeps']['prev'])
-                choices = list(range(len(results['cam_sweeps']['prev']))) + \
-                    [len(results['cam_sweeps']['prev']) - 1] * pad_len
-            else:
-                max_interval = len(results['cam_sweeps']['prev']) // self.sweeps_num
-                max_interval = min(max_interval, self.train_interval[1])
-                min_interval = min(max_interval, self.train_interval[0])
-                interval = np.random.randint(min_interval, max_interval + 1)
-                choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
-
-            for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
-                sweep = results['cam_sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['cam_sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
-                    results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
-                    results['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
-                    results['ego2img'].append(compose_ego2img(
-                        results['ego2global_translation'],
-                        results['ego2global_rotation'],
-                        sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'],
-                        sweep[sensor]['cam_intrinsic'],
-                    ))
-
-        return results
-
-    def load_online(self, results):
-        # only used when measuring FPS
-        assert self.test_mode
-        assert self.test_interval % 6 == 0
-
-        cam_types = [
-            'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
-            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
-        ]
-
-        if len(results['cam_sweeps']['prev']) == 0:
-            for _ in range(self.sweeps_num):
-                for j in range(len(cam_types)):
-                    results['img_timestamp'].append(results['img_timestamp'][j])
-                    results['filename'].append(results['filename'][j])
-                    results['ego2img'].append(np.copy(results['ego2img'][j]))
+            return index + [index[-1]] * (tgt_len - len(index))
+    
+    def collect_infos(self, curr, prevs, nexts):
+        if self.order == 'temporal':
+            infos = nexts[::-1] + [curr] + prevs
+            latest = 0
         else:
-            if self.only_keyframe:
-                sweeps = results['cam_sweeps']['prev']
-                index = [i for i in range(len(sweeps)) if sweeps[i]['CAM_FRONT']['is_key_frame']]
-                if len(index) < self.sweeps_num:
-                    index = index + [index[-1]] * (self.sweeps_num - len(index))
-                choice = index[:self.sweeps_num]
-            else:
-                interval = self.test_interval
-                choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
+            infos = [curr]
+            for prev, next in zip(prevs, nexts):
+                infos.extend([prev, next])
+            latest = len(infos) - 1
 
-            for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
-                sweep = results['cam_sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['cam_sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    # skip loading history frames
-                    results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
-                    results['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
-                    results['ego2img'].append(compose_ego2img(
-                        results['ego2global_translation'],
-                        results['ego2global_rotation'],
-                        sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'],
-                        sweep[sensor]['cam_intrinsic'],
-                    ))
-
-        return results
-
-    def __call__(self, results):
-        if self.sweeps_num == 0:
-            return results
-
+        data = dict(img=[], filename=[], img_timestamp=[], ego2img=[])
         world_size = get_dist_info()[1]
-        if world_size == 1 and self.test_mode and (not self.force_offline):
-            return self.load_online(results)
-        else:
-            return self.load_offline(results)
-
-
-@PIPELINES.register_module()
-class LoadMultiViewImageFromMultiSweepsFuture:
-    def __init__(self,
-                 prev_sweeps_num=5,
-                 next_sweeps_num=5,
-                 color_type='color',
-                 test_mode=False):
-        self.prev_sweeps_num = prev_sweeps_num
-        self.next_sweeps_num = next_sweeps_num
-        self.color_type = color_type
-        self.test_mode = test_mode
-
-        assert prev_sweeps_num == next_sweeps_num
-
-        self.train_interval = [4, 8]
-        self.test_interval = 6
-
-        try:
-            mmcv.use_backend('turbojpeg')
-        except ImportError:
-            mmcv.use_backend('cv2')
-
+        online = self.test_mode and not self.force_offline and world_size == 1
+        for i, info in enumerate(infos):
+            data['filename'].extend(info['filename'])
+            data['img_timestamp'].extend(info['img_timestamp'])
+            data['ego2img'].extend(info['ego2img'])
+            if online and i != latest:
+                continue
+            else:
+                for filename in info['filename']:
+                    data['img'].append(mmcv.imread(filename, self.color_type))
+        
+        data['img_shape'] = data['img'][0].shape
+        data['ori_shape'] = data['img'][0].shape
+        data['pad_shape'] = data['img'][0].shape
+        num_channels = 1 if len(data['img'][0].shape) < 3 else data['img'][0].shape[2]
+        data['img_norm_cfg'] = dict(
+            mean=np.zeros(num_channels, dtype=np.float32),
+            std=np.ones(num_channels, dtype=np.float32),
+            to_rgb=False)
+        return data
+    
     def __call__(self, results):
-        if self.prev_sweeps_num == 0 and self.next_sweeps_num == 0:
-            return results
-
-        cam_types = [
-            'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
-            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
-        ]
-
-        if self.test_mode:
-            interval = self.test_interval
+        prev_sweeps = results['cam_sweeps']['prev']
+        next_sweeps = results['cam_sweeps']['next']
+        if self.test_mode or self.only_keyframe:
+            prev_index = [i for i in range(len(prev_sweeps)) 
+                          if prev_sweeps[i]['CAM_FRONT']['is_key_frame']]
+            prev_index = prev_index[:self.prev_sweeps_num]
+            next_index = [i for i in range(len(next_sweeps))
+                          if next_sweeps[i]['CAM_FRONT']['is_key_frame']]
+            next_index = next_index[:self.next_sweeps_num]
         else:
-            interval = np.random.randint(self.train_interval[0], self.train_interval[1] + 1)
-
-        # previous sweeps
-        if len(results['cam_sweeps']['prev']) == 0:
-            for _ in range(self.prev_sweeps_num):
-                for j in range(len(cam_types)):
-                    results['img'].append(results['img'][j])
-                    results['img_timestamp'].append(results['img_timestamp'][j])
-                    results['filename'].append(results['filename'][j])
-                    results['ego2img'].append(np.copy(results['ego2img'][j]))
-        else:
-            choices = [(k + 1) * interval - 1 for k in range(self.prev_sweeps_num)]
-
-            for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
-                sweep = results['cam_sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['cam_sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
-                    results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
-                    results['filename'].append(sweep[sensor]['data_path'])
-                    results['ego2img'].append(compose_ego2img(
-                        results['ego2global_translation'],
-                        results['ego2global_rotation'],
-                        sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'],
-                        sweep[sensor]['cam_intrinsic'],
-                    ))
-
-        # future sweeps
-        if len(results['cam_sweeps']['next']) == 0:
-            for _ in range(self.next_sweeps_num):
-                for j in range(len(cam_types)):
-                    results['img'].append(results['img'][j])
-                    results['img_timestamp'].append(results['img_timestamp'][j])
-                    results['filename'].append(results['filename'][j])
-                    results['ego2img'].append(np.copy(results['ego2img'][j]))
-        else:
-            choices = [(k + 1) * interval - 1 for k in range(self.next_sweeps_num)]
-
-            for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['cam_sweeps']['next']) - 1)
-                sweep = results['cam_sweeps']['next'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['cam_sweeps']['next'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
-                    results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
-                    results['filename'].append(sweep[sensor]['data_path'])
-                    results['ego2img'].append(compose_ego2img(
-                        results['ego2global_translation'],
-                        results['ego2global_rotation'],
-                        sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'],
-                        sweep[sensor]['cam_intrinsic'],
-                    ))
-
+            interval = np.random.randint(self.interval[0], self.interval[1] + 1)
+            prev_index = [(k + 1) * interval - 1 for k in range(self.prev_sweeps_num)
+                          if (k + 1) * interval - 1 < len(prev_sweeps)]
+            next_index = [(k + 1) * interval - 1 for k in range(self.next_sweeps_num)
+                          if (k + 1) * interval - 1 < len(next_sweeps)]
+        
+        prev_index = self.padding(prev_index, self.prev_sweeps_num)
+        next_index = self.padding(next_index, self.next_sweeps_num)
+        
+        curr_info = self.extract_info(results, results['cam_info'])
+        prev_infos = [self.extract_info(results, prev_sweeps[i]) if i != -1 \
+                      else curr_info for i in prev_index]
+        next_infos = [self.extract_info(results, next_sweeps[i]) if i != -1 \
+                      else curr_info for i in next_index]
+        data = self.collect_infos(curr_info, prev_infos, next_infos)
+        results.update(data)
         return results
 
 
-'''
-This func loads previous and future frames in interleaved order, 
-e.g. curr, prev1, next1, prev2, next2, prev3, next3...
-'''
 @PIPELINES.register_module()
-class LoadMultiViewImageFromMultiSweepsFutureInterleave:
-    def __init__(self,
-                 prev_sweeps_num=5,
-                 next_sweeps_num=5,
-                 color_type='color',
-                 test_mode=False):
-        self.prev_sweeps_num = prev_sweeps_num
-        self.next_sweeps_num = next_sweeps_num
-        self.color_type = color_type
-        self.test_mode = test_mode
-
-        assert prev_sweeps_num == next_sweeps_num
-
-        self.train_interval = [4, 8]
-        self.test_interval = 6
-
-        try:
-            mmcv.use_backend('turbojpeg')
-        except ImportError:
-            mmcv.use_backend('cv2')
-
-    def __call__(self, results):
-        if self.prev_sweeps_num == 0 and self.next_sweeps_num == 0:
-            return results
-
-        cam_types = [
-            'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_FRONT_LEFT',
-            'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
-        ]
-
-        if self.test_mode:
-            interval = self.test_interval
-        else:
-            interval = np.random.randint(self.train_interval[0], self.train_interval[1] + 1)
-
-        results_prev = dict(
-            img=[],
-            img_timestamp=[],
-            filename=[],
-            ego2img=[],
-        )
-        results_next = dict(
-            img=[],
-            img_timestamp=[],
-            filename=[],
-            ego2img=[],
-        )
-
-        if len(results['sweeps']['prev']) == 0:
-            for _ in range(self.prev_sweeps_num):
-                for j in range(len(cam_types)):
-                    results_prev['img'].append(results['img'][j])
-                    results_prev['img_timestamp'].append(results['img_timestamp'][j])
-                    results_prev['filename'].append(results['filename'][j])
-                    results_prev['ego2img'].append(np.copy(results['ego2img'][j]))
-        else:
-            choices = [(k + 1) * interval - 1 for k in range(self.prev_sweeps_num)]
-
-            for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['sweeps']['prev']) - 1)
-                sweep = results['sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    results_prev['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
-                    results_prev['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
-                    results_prev['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
-                    results['ego2img'].append(compose_ego2img(
-                        results['ego2global_translation'],
-                        results['ego2global_rotation'],
-                        sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'],
-                        sweep[sensor]['cam_intrinsic'],
-                    ))
-
-        if len(results['sweeps']['next']) == 0:
-            print(1, len(results_next['img']) )
-            for _ in range(self.next_sweeps_num):
-                for j in range(len(cam_types)):
-                    results_next['img'].append(results['img'][j])
-                    results_next['img_timestamp'].append(results['img_timestamp'][j])
-                    results_next['filename'].append(results['filename'][j])
-                    results_next['ego2img'].append(np.copy(results['ego2img'][j]))
-        else:
-            choices = [(k + 1) * interval - 1 for k in range(self.next_sweeps_num)]
-
-            for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['sweeps']['next']) - 1)
-                sweep = results['sweeps']['next'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['sweeps']['next'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    results_next['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
-                    results_next['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
-                    results_next['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
-                    results['ego2img'].append(compose_ego2img(
-                        results['ego2global_translation'],
-                        results['ego2global_rotation'],
-                        sweep[sensor]['sensor2global_translation'],
-                        sweep[sensor]['sensor2global_rotation'],
-                        sweep[sensor]['cam_intrinsic'],
-                    ))
-
-        assert len(results_prev['img']) % 6 == 0
-        assert len(results_next['img']) % 6 == 0
-
-        for i in range(len(results_prev['img']) // 6):
-            for j in range(6):
-                results['img'].append(results_prev['img'][i * 6 + j])
-                results['img_timestamp'].append(results_prev['img_timestamp'][i * 6 + j])
-                results['filename'].append(results_prev['filename'][i * 6 + j])
-                results['ego2img'].append(results_prev['ego2img'][i * 6 + j])
-
-            for j in range(6):
-                results['img'].append(results_next['img'][i * 6 + j])
-                results['img_timestamp'].append(results_next['img_timestamp'][i * 6 + j])
-                results['filename'].append(results_next['filename'][i * 6 + j])
-                results['ego2img'].append(results_next['ego2img'][i * 6 + j])
-
-        return results
-
-
-# Repalce LoadPointsFromMultiSweeps in mmdet3d to adapt sparsebev data
-@PIPELINES.register_module(force=True)
-class LoadPointsFromMultiSweeps:
-    """Load points from multiple sweeps.
-
-    This is usually used for nuScenes dataset to utilize previous sweeps.
-
-    Args:
-        sweeps_num (int, optional): Number of sweeps. Defaults to 10.
-        load_dim (int, optional): Dimension number of the loaded points.
-            Defaults to 5.
-        use_dim (list[int], optional): Which dimension to use.
-            Defaults to [0, 1, 2, 4].
-        time_dim (int, optional): Which dimension to represent the timestamps
-            of each points. Defaults to 4.
-        file_client_args (dict, optional): Config dict of file clients,
-            refer to
-            https://github.com/open-mmlab/mmcv/blob/master/mmcv/fileio/file_client.py
-            for more details. Defaults to dict(backend='disk').
-        pad_empty_sweeps (bool, optional): Whether to repeat keyframe when
-            sweeps is empty. Defaults to False.
-        remove_close (bool, optional): Whether to remove close points.
-            Defaults to False.
-        test_mode (bool, optional): If `test_mode=True`, it will not
-            randomly sample sweeps but select the nearest N frames.
-            Defaults to False.
-    """
+class LoadPointsWithSweeps:
 
     def __init__(self,
-                 sweeps_num=10,
+                 prev_sweeps_num=0,
+                 next_sweeps_num=0,
                  load_dim=5,
                  use_dim=[0, 1, 2, 4],
                  time_dim=4,
+                 tgt_coord_system='occ',
                  file_client_args=dict(backend='disk'),
                  pad_empty_sweeps=False,
                  remove_close=False,
                  test_mode=False):
-        self.load_dim = load_dim
-        self.sweeps_num = sweeps_num
-        self.use_dim = use_dim
-        self.time_dim = time_dim
-        assert time_dim < load_dim, \
-            f'Expect the timestamp dimension < {load_dim}, got {time_dim}'
-        self.file_client_args = file_client_args.copy()
-        self.file_client = None
-        self.pad_empty_sweeps = pad_empty_sweeps
-        self.remove_close = remove_close
-        self.test_mode = test_mode
+        self.prev_sweeps_num = prev_sweeps_num
+        self.next_sweeps_num = next_sweeps_num
+
         if isinstance(use_dim, int):
             use_dim = list(range(use_dim))
         assert max(use_dim) < load_dim, \
             f'Expect all used dimensions < {load_dim}, got {use_dim}'
+        assert time_dim < load_dim, \
+            f'Expect the timestamp dimension < {load_dim}, got {time_dim}'
+        self.load_dim = load_dim
+        self.use_dim = use_dim
+        self.time_dim = time_dim
 
-    def _load_points(self, pts_filename):
-        """Private function to load point clouds data.
+        assert tgt_coord_system in ['ego', 'lidar', 'occ', 'obj']
+        self.tgt_coord_system = tgt_coord_system
 
-        Args:
-            pts_filename (str): Filename of point clouds data.
+        self.file_client = None
+        self.file_client_args = file_client_args.copy()
+        self.pad_empty_sweeps = pad_empty_sweeps
+        self.remove_close = remove_close
 
-        Returns:
-            np.ndarray: An array containing point clouds data.
-        """
+    def load_points(self, pts_filename):
         if self.file_client is None:
             self.file_client = mmcv.FileClient(**self.file_client_args)
         try:
@@ -521,108 +256,91 @@ class LoadPointsFromMultiSweeps:
                 points = np.load(pts_filename)
             else:
                 points = np.fromfile(pts_filename, dtype=np.float32)
-        return points
+        return points.copy().reshape(-1, self.load_dim)
 
     def _remove_close(self, points, radius=1.0):
-        """Removes point too close within a certain radius from origin.
-
-        Args:
-            points (np.ndarray | :obj:`BasePoints`): Sweep points.
-            radius (float, optional): Radius below which points are removed.
-                Defaults to 1.0.
-
-        Returns:
-            np.ndarray: Points after removing.
-        """
-        if isinstance(points, np.ndarray):
-            points_numpy = points
-        elif isinstance(points, BasePoints):
-            points_numpy = points.tensor.numpy()
-        else:
-            raise NotImplementedError
-        x_filt = np.abs(points_numpy[:, 0]) < radius
-        y_filt = np.abs(points_numpy[:, 1]) < radius
+        x_filt = np.abs(points[:, 0]) < radius
+        y_filt = np.abs(points[:, 1]) < radius
         not_close = np.logical_not(np.logical_and(x_filt, y_filt))
         return points[not_close]
-
-    def __call__(self, results):
-        """Call function to load multi-sweep point clouds from files.
-
-        Args:
-            results (dict): Result dict containing multi-sweep point cloud
-                filenames.
-
-        Returns:
-            dict: The result dict containing the multi-sweep points data.
-                Added key and value are described below.
-
-                - points (np.ndarray | :obj:`BasePoints`): Multi-sweep point
-                    cloud arrays.
-        """
-        points = results['points']
-        points.tensor[:, self.time_dim] = 0
-        sweep_points_list = [points]
-        ts = results['timestamp']
-        sweeps = results['lidar_sweeps']['prev']
-        l2g_r = results['lidar2global_rotation']
-        l2g_t = results['lidar2global_translation']
-
-        if self.pad_empty_sweeps and len(sweeps) == 0:
-            for i in range(self.sweeps_num):
-                if self.remove_close:
-                    sweep_points_list.append(self._remove_close(points))
-                else:
-                    sweep_points_list.append(points)
-        else:
-            if len(sweeps) <= self.sweeps_num:
-                choices = np.arange(len(sweeps))
-            else:
-                choices = np.arange(self.sweeps_num)
-
-            for idx in choices:
-                sweep = sweeps[idx]
-                points_sweep = self._load_points(sweep['data_path'])
-                points_sweep = np.copy(points_sweep).reshape(-1, self.load_dim)
-                if self.remove_close:
-                    points_sweep = self._remove_close(points_sweep)
-
-                s2g_r = sweep['sensor2global_rotation']
-                s2g_t = sweep['sensor2global_translation']
-                s2l_r = l2g_r.T @ s2g_r
-                s2l_t = (s2g_t - l2g_t) @ l2g_r
-                points_sweep[:, :3] = points_sweep[:, :3] @ s2l_r.T + s2l_t
-
-                sweep_ts = sweep['timestamp'] / 1e6
-                points_sweep[:, self.time_dim] = ts - sweep_ts
-                points_sweep = points.new_point(points_sweep)
-                sweep_points_list.append(points_sweep)
-
-        points = points.cat(sweep_points_list)
-        points = points[:, self.use_dim]
-        results['points'] = points
-        return results
-
-    def __repr__(self):
-        """str: Return a string that describes the module."""
-        return f'{self.__class__.__name__}(sweeps_num={self.sweeps_num})'
-
-
-@PIPELINES.register_module()
-class LiDARToOccSpace:
     
+    def padding(self, index, tgt_len):
+        if len(index) == 0:
+            return [-1 for _ in range(tgt_len)]
+        else:
+            return index + [index[-1]] * (tgt_len - len(index))
+    
+    def load_sweep(self, sweep, l2g_r, l2g_t, ts):
+        points_sweep = self.load_points(sweep['data_path'])
+        if self.remove_close:
+            points_sweep = self._remove_close(points_sweep)
+
+        s2g_r = sweep['sensor2global_rotation']
+        s2g_t = sweep['sensor2global_translation']
+        s2l_r = l2g_r.T @ s2g_r
+        s2l_t = (s2g_t - l2g_t) @ l2g_r
+        points_sweep[:, :3] = points_sweep[:, :3] @ s2l_r.T + s2l_t
+
+        sweep_ts = sweep['timestamp'] / 1e6
+        points_sweep[:, self.time_dim] = ts - sweep_ts
+        return points_sweep
+
     def __call__(self, results):
-        points = results['points']
-        ego2lidar, ego2occ = results['ego2lidar'], results['ego2occ']
+        prev_sweeps = results['lidar_sweeps']['prev']
+        next_sweeps = results['lidar_sweeps']['next']
+        l2g_r = results['lidar_info']['sensor2global_rotation']
+        l2g_t = results['lidar_info']['sensor2global_translation']
 
-        lidar2ego = torch.tensor(inv(ego2lidar)).float()
-        lidar2occ = torch.tensor(ego2occ @ lidar2ego.numpy()).float()
-        ones = torch.ones_like(points.tensor[..., :1])
-        pts = torch.cat([points.tensor[..., :3], ones], dim=1).transpose(0, 1)
-        pts = torch.matmul(lidar2occ, pts).transpose(0, 1)[...,:3]
+        curr_points = self.load_points(results['lidar_info']['data_path'])
+        curr_points[:, self.time_dim] = 0
+        ts = results['timestamp']
 
-        points.tensor = torch.cat([pts, points.tensor[..., 3:]], dim=1)
+        prev_index = list(range(self.prev_sweeps_num))[:len(prev_sweeps)]
+        if self.pad_empty_sweeps:
+            prev_index = self.padding(prev_index, self.prev_sweeps_num)
+        next_index = list(range(self.next_sweeps_num))[:len(next_sweeps)]
+        if self.pad_empty_sweeps:
+            next_index = self.padding(next_index, self.next_sweeps_num)
+        
+        prev_points = []
+        for i in prev_index:
+            if i == -1:
+                points = curr_points if not self.remove_close else \
+                    self._remove_close(curr_points)
+            else:
+                points = self.load_sweep(prev_sweeps[i], l2g_r, l2g_t, ts)
+            prev_points.append(points)
+
+        next_points = []
+        for i in next_index:
+            if i == -1:
+                points = curr_points if not self.remove_close else \
+                    self._remove_close(curr_points)
+            else:
+                points = self.load_sweep(next_sweeps[i], l2g_r, l2g_t, ts)
+            next_points.append(points)
+        
+        points = [curr_points] + prev_points + next_points
+        points = np.concatenate(points, axis=0)
+        points = points[:, self.use_dim]
+
+        lidar2ego = np.linalg.inv(results['ego2lidar'])
+        if self.tgt_coord_system == 'ego':
+            ego2tgt = np.eye(4)
+        elif self.tgt_coord_system == 'lidar':
+            ego2tgt = results['ego2lidar']
+        elif self.tgt_coord_system == 'occ':
+            ego2tgt = results['ego2occ']
+        elif self.tgt_coord_system == 'obj':
+            ego2tgt = results['ego2obj']
+        mat = ego2tgt @ lidar2ego
+        coors = np.concatenate(
+            [points[:, :3], np.ones((points.shape[0], 1))], axis=1)
+        coors = (mat @ coors.T).T
+        points[:, :3] = coors[:, :3]
+
         results['points'] = points
-        results['ego2lidar'] = ego2occ.copy()
+        results['ego2lidar'] = ego2tgt.copy()
         return results
 
 

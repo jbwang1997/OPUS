@@ -3,7 +3,7 @@ dataset_root = 'data/nuscenes/'
 occ_root = 'data/nuscenes/gts/'
 
 input_modality = dict(
-    use_lidar=False,
+    use_lidar=True,
     use_camera=True,
     use_radar=False,
     use_map=False,
@@ -26,17 +26,23 @@ occ_names = [
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
+pc_voxel_size = [0.05, 0.05, 0.16]
 voxel_size = [0.4, 0.4, 0.4]
+
+# input frames
+prev_img_frames = 7
+prev_pts_frames = 9
+next_img_frames = 7
+next_pts_frames = 9
 
 # arch config
 embed_dims = 256
-num_layers = 5
-num_query = 1200
-num_frames = 8
+num_layers = 6
+num_query = 600
 num_levels = 4
-num_points = 2
-num_refines = [4, 8, 16, 32, 64]
-num_pt_channels = 32
+num_points = 4
+num_refines = [1, 4, 16, 32, 64, 128]
+
 
 img_backbone = dict(
     type='ResNet',
@@ -58,8 +64,40 @@ img_norm_cfg = dict(
     std=[58.395, 57.120, 57.375],
     to_rgb=True)
 
+pts_voxel_layer=dict(max_num_points=10, voxel_size=pc_voxel_size, deterministic=False,
+                     max_voxels=(90000, 120000), point_cloud_range=point_cloud_range)
+pts_voxel_encoder=dict(type='HardSimpleVFE', num_features=5)
+pts_middle_encoder=dict(
+    type='SparseEncoder',
+    in_channels=5,
+    sparse_shape=[41, 1600, 1600],
+    output_channels=128,
+    order=('conv', 'norm', 'act'),
+    encoder_channels=((16, 16, 32), 
+                      (32, 32, 64), 
+                      (64, 64, 128), 
+                      (128,128)),
+    encoder_paddings=((0, 0, 1), (0, 0, 1), (0, 0, [0, 1, 1]), (0, 0)),
+    block_type='basicblock')
+pts_backbone=dict(
+    type='SECOND',
+    in_channels=256,
+    out_channels=[128, 256],
+    layer_nums=[5, 5],
+    layer_strides=[1, 2],
+    norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
+    conv_cfg=dict(type='Conv2d', bias=False))
+pts_neck=dict(
+    type='SECONDFPN',
+    in_channels=[128, 256],
+    out_channels=[256, 256],
+    upsample_strides=[1, 2],
+    norm_cfg=dict(type='BN', eps=1e-3, momentum=0.01),
+    upsample_cfg=dict(type='deconv', bias=False),
+    use_conv_for_no_stride=True)
+
 model = dict(
-    type='OPUSV2',
+    type='OPUSV1Fusion',
     use_grid_mask=False,
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
@@ -68,22 +106,28 @@ model = dict(
     stop_prev_grad=0,
     img_backbone=img_backbone,
     img_neck=img_neck,
+    pts_voxel_layer=pts_voxel_layer,
+    pts_voxel_encoder=pts_voxel_encoder,
+    pts_middle_encoder=pts_middle_encoder,
+    pts_backbone=pts_backbone,
+    pts_neck=pts_neck,
     pts_bbox_head=dict(
-        type='OPUSV2Head',
+        type='OPUSV1FusionHead',
         num_classes=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
         pc_range=point_cloud_range,
         voxel_size=voxel_size,
+        init_pos_lidar='curr',
         transformer=dict(
-            type='OPUSV2Transformer',
+            type='OPUSV1FusionTransformer',
             embed_dims=embed_dims,
-            num_frames=num_frames,
+            num_frames=1+prev_img_frames+next_img_frames,
             num_points=num_points,
             num_layers=num_layers,
             num_levels=num_levels,
+            num_classes=len(occ_names),
             num_refines=num_refines,
-            num_pt_channels=num_pt_channels,
             scales=[0.5],
             pc_range=point_cloud_range),
         loss_cls=dict(
@@ -100,7 +144,9 @@ model = dict(
             )
         ),
     test_cfg=dict(
-        pts=dict(score_thr=0.25)
+        pts=dict(
+            score_thr=0.5,
+            padding=True)
     )
 )
 
@@ -113,30 +159,35 @@ ida_aug_conf = {
     'rand_flip': True,
 }
 
-bda_aug_conf = {
-    'flip_dx_ratio': 0.5,
-    'flip_dy_ratio': 0.5,
-}
-
 train_pipeline = [
-    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=prev_img_frames, 
+         next_sweeps_num=next_img_frames),
+    dict(type='LoadPointsWithSweeps', prev_sweeps_num=prev_pts_frames, 
+         next_sweeps_num=next_pts_frames, load_dim=5, use_dim=5, 
+         tgt_coord_system='occ', pad_empty_sweeps=True, remove_close=True),
     dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
-    dict(type='RandomTransformOcc', bda_aug_conf=bda_aug_conf),
-    dict(type='FinalFormatting', keys=['img', 'voxel_semantics', 'mask_camera'],
-         meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
+    dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
+    dict(type='FinalFormatting', keys=['img', 'points', 'voxel_semantics', 'mask_camera'],
+         meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ', 
                     'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 test_pipeline = [
-    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1, test_mode=True),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=prev_img_frames, 
+         next_sweeps_num=next_img_frames, test_mode=True),
+    dict(type='LoadPointsWithSweeps', prev_sweeps_num=prev_pts_frames, 
+         next_sweeps_num=next_pts_frames, load_dim=5, use_dim=5, 
+         tgt_coord_system='occ', pad_empty_sweeps=True, remove_close=True),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
-    dict(type='FinalFormatting', test_mode=True, keys=['img'],
+    dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
+    dict(type='FinalFormatting', test_mode=True, keys=['img', 'points'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
                     'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
 data = dict(
+    # workers_per_gpu=1,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -193,11 +244,11 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 100
-batch_size = 8
+batch_size = 1
 
 # load pretrained weights
-load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'
-revise_keys = [('backbone', 'img_backbone')]
+load_from = 'pretrain/fusion_pretrain_model.pth'
+revise_keys = []
 
 # resume the last training
 resume_from = None

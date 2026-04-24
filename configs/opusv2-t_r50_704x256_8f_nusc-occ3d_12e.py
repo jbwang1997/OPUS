@@ -31,11 +31,11 @@ voxel_size = [0.4, 0.4, 0.4]
 # arch config
 embed_dims = 256
 num_layers = 5
-num_query = 1200
-num_frames = 8
+num_query = 600
+num_frames = 4
 num_levels = 4
-num_points = 2
-num_refines = [4, 8, 16, 32, 64]
+num_points = 4
+num_refines = [8, 16, 32, 64, 128]
 num_pt_channels = 32
 
 img_backbone = dict(
@@ -141,7 +141,7 @@ data = dict(
     train=dict(
         type=dataset_type,
         data_root=dataset_root,
-        ann_file=dataset_root + 'nuscenes_infos_train_sweep.pkl',
+        ann_file=dataset_root + 'nuscenes_infos_train_sweep2.pkl',
         pipeline=train_pipeline,
         classes=object_names,
         modality=input_modality,
@@ -151,7 +151,7 @@ data = dict(
     val=dict(
         type=dataset_type,
         data_root=dataset_root,
-        ann_file=dataset_root + 'nuscenes_infos_val_sweep.pkl',
+        ann_file=dataset_root + 'nuscenes_infos_val_sweep2.pkl',
         pipeline=test_pipeline,
         classes=object_names,
         modality=input_modality,
@@ -160,7 +160,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=dataset_root,
-        ann_file=dataset_root + 'nuscenes_infos_test_sweep.pkl',
+        ann_file=dataset_root + 'nuscenes_infos_test_sweep2.pkl',
         pipeline=test_pipeline,
         classes=object_names,
         modality=input_modality,
@@ -192,7 +192,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 100
+total_epochs = 12
 batch_size = 8
 
 # load pretrained weights

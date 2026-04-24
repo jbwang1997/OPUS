@@ -1,6 +1,6 @@
-dataset_type = 'NuScenesOcc3DDataset'
+dataset_type = 'NuScenesOccupancyDataset'
 dataset_root = 'data/nuscenes/'
-occ_root = 'data/nuscenes/gts/'
+occ_root = 'data/nuscenes/occupancy'
 
 input_modality = dict(
     use_lidar=False,
@@ -17,7 +17,7 @@ object_names = [
 ]
 
 occ_names = [
-    'others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+    'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
     'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
     'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
     'vegetation'
@@ -25,17 +25,20 @@ occ_names = [
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
-voxel_size = [0.4, 0.4, 0.4]
+point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3]
+voxel_size = [0.2, 0.2, 0.2]
+
+# frame
+prev_frames = 7
+next_frames = 7
 
 # arch config
 embed_dims = 256
 num_layers = 5
-num_query = 1200
-num_frames = 8
+num_query = 600
 num_levels = 4
-num_points = 2
-num_refines = [4, 8, 16, 32, 64]
+num_points = 4
+num_refines = [8, 16, 32, 64, 128]
 num_pt_channels = 32
 
 img_backbone = dict(
@@ -71,6 +74,7 @@ model = dict(
     pts_bbox_head=dict(
         type='OPUSV2Head',
         num_classes=len(occ_names),
+        empty_label=len(occ_names),
         in_channels=embed_dims,
         num_query=num_query,
         pc_range=point_cloud_range,
@@ -78,7 +82,7 @@ model = dict(
         transformer=dict(
             type='OPUSV2Transformer',
             embed_dims=embed_dims,
-            num_frames=num_frames,
+            num_frames=1+prev_frames+next_frames,
             num_points=num_points,
             num_layers=num_layers,
             num_levels=num_levels,
@@ -96,7 +100,7 @@ model = dict(
     train_cfg=dict(
         pts=dict(
             cls_weights=[
-                10, 5, 10, 5, 5, 10, 10, 5, 10, 5, 5, 1, 5, 1, 1, 2, 1],
+                5, 10, 5, 5, 10, 10, 5, 10, 5, 5, 1, 5, 1, 1, 2, 1],
             )
         ),
     test_cfg=dict(
@@ -119,8 +123,9 @@ bda_aug_conf = {
 }
 
 train_pipeline = [
-    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1),
-    dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=prev_frames,
+         next_sweeps_num=next_frames),
+    dict(type='LoadOccupancyFromFile', occ_root=occ_root), 
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='RandomTransformOcc', bda_aug_conf=bda_aug_conf),
     dict(type='FinalFormatting', keys=['img', 'voxel_semantics', 'mask_camera'],
@@ -129,7 +134,8 @@ train_pipeline = [
 ]
 
 test_pipeline = [
-    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=num_frames-1, test_mode=True),
+    dict(type='LoadMVImageWithSweeps', prev_sweeps_num=prev_frames, 
+         next_sweeps_num=next_frames, test_mode=True),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(type='FinalFormatting', test_mode=True, keys=['img'],
          meta_keys=('filename', 'ori_shape', 'img_shape', 'pad_shape', 'ego2occ',
@@ -192,7 +198,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3
 )
-total_epochs = 100
+total_epochs = 50
 batch_size = 8
 
 # load pretrained weights

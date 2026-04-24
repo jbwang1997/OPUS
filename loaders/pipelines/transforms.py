@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from PIL import Image
 from numpy import random
-from mmdet.datasets.builder import PIPELINES
+from mmdet3d.datasets.builder import PIPELINES
 from torchvision.transforms.functional import affine
 
 
@@ -423,4 +423,23 @@ class RandomTransformOcc:
             results['mask_lidar'] = mask_lidar.copy()
             results['mask_camera'] = mask_camera.copy()
 
+        return results
+
+
+@PIPELINES.register_module(force=True)
+class PointsRangeFilter(object):
+
+    def __init__(self, point_cloud_range):
+        self.pcd_range = np.array(point_cloud_range, dtype=np.float32)
+
+    def __call__(self, results):
+        points = results['points']
+        in_range_flags = ((points[:, 0] > self.pcd_range[0])
+                    & (points[:, 1] > self.pcd_range[1])
+                    & (points[:, 2] > self.pcd_range[2])
+                    & (points[:, 0] < self.pcd_range[3])
+                    & (points[:, 1] < self.pcd_range[4])
+                    & (points[:, 2] < self.pcd_range[5]))
+        results['points'] = points[in_range_flags]
+        # import pdb; pdb.set_trace()
         return results
