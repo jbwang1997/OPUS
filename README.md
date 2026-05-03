@@ -472,8 +472,6 @@ Install MM dependencies:
 pip install openmim
 mim install mmcv-full==1.6.0
 mim install mmdet==2.28.2
-mim install mmsegmentation==0.30.0
-mim install mmdet3d==1.0.0rc6
 ```
 Install other dependencies:
 ```

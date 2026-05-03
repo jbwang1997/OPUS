@@ -2,12 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.runner import force_fp32, BaseModule
-from mmcv.ops import knn, Voxelization
+from mmcv.ops import knn, Voxelization, furthest_point_sample, gather_points
 from mmdet.core import multi_apply
 from mmdet.models import HEADS
 from mmdet.models.utils import build_transformer
 from mmdet.models.builder import build_loss
-from mmdet3d.ops import furthest_point_sample, gather_points
 from ..bbox.utils import decode_points, encode_points
 
 
@@ -273,7 +272,7 @@ class OPUSV1FusionHead(BaseModule):
             num_dec_layer += 1
         return loss_dict
     
-    def get_occ(self, pred_dicts, img_metas, rescale=False):
+    def get_occ(self, pred_dicts, img_metas):
         all_cls_scores = pred_dicts['all_cls_scores']
         all_refine_pts = pred_dicts['all_refine_pts']
         cls_scores = all_cls_scores[-1].sigmoid()

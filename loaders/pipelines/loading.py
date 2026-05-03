@@ -3,7 +3,7 @@ import mmcv
 import torch
 import numpy as np
 import os.path as osp
-from mmdet3d.datasets.builder import PIPELINES
+from mmdet.datasets.builder import PIPELINES
 from numpy.linalg import inv
 from mmcv.runner import get_dist_info
 

@@ -234,7 +234,7 @@ class OPUSV1Head(BaseModule):
             num_dec_layer += 1
         return loss_dict
     
-    def get_occ(self, pred_dicts, img_metas, rescale=False):
+    def get_occ(self, pred_dicts, img_metas):
         all_cls_scores = pred_dicts['all_cls_scores']
         all_refine_pts = pred_dicts['all_refine_pts']
         cls_scores = all_cls_scores[-1].sigmoid()

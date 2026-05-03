@@ -1,18 +1,17 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import torch
+from mmcv.ops import points_in_boxes_all, three_interpolate, three_nn
 from mmcv.runner import auto_fp16
 from torch import nn as nn
 
-from mmdet3d.ops import SparseBasicBlock, make_sparse_convmodule
-from mmdet3d.ops.spconv import IS_SPCONV2_AVAILABLE
-from mmdet3d.models.builder import MIDDLE_ENCODERS
+from .sparse_block import SparseBasicBlock, make_sparse_convmodule
+from mmdet.models.builder import BACKBONES
 
-if IS_SPCONV2_AVAILABLE:
-    from spconv.pytorch import SparseConvTensor, SparseSequential
-else:
-    from mmcv.ops import SparseConvTensor, SparseSequential
+from spconv.pytorch import SparseConvTensor, SparseSequential
 
 
-@MIDDLE_ENCODERS.register_module()
-class SparseEncoder8x(nn.Module):
+@BACKBONES.register_module()
+class SparseEncoder(nn.Module):
     r"""Sparse encoder for SECOND and Part-A2.
 
     Args:
@@ -93,8 +92,8 @@ class SparseEncoder8x(nn.Module):
         self.conv_out = make_sparse_convmodule(
             encoder_out_channels,
             self.output_channels,
-            kernel_size=(1, 1, 1),
-            stride=(1, 1, 1),
+            kernel_size=(3, 1, 1),
+            stride=(2, 1, 1),
             norm_cfg=norm_cfg,
             padding=0,
             indice_key='spconv_down2',
@@ -126,14 +125,12 @@ class SparseEncoder8x(nn.Module):
         # for detection head
         # [200, 176, 5] -> [200, 176, 2]
         out = self.conv_out(encode_features[-1])
+        spatial_features = out.dense()
 
-        ## for following usage, comment following code
-        # spatial_features = out.dense()
+        N, C, D, H, W = spatial_features.shape
+        spatial_features = spatial_features.view(N, C * D, H, W)
 
-        # N, C, D, H, W = spatial_features.shape
-        # spatial_features = spatial_features.view(N, C , D, H, W)
-
-        return out
+        return spatial_features
 
     def make_encoder_layers(self,
                             make_block,

@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from PIL import Image
 from numpy import random
-from mmdet3d.datasets.builder import PIPELINES
+from mmdet.datasets.builder import PIPELINES
 from torchvision.transforms.functional import affine
 
 
@@ -441,5 +441,4 @@ class PointsRangeFilter(object):
                     & (points[:, 1] < self.pcd_range[4])
                     & (points[:, 2] < self.pcd_range[5]))
         results['points'] = points[in_range_flags]
-        # import pdb; pdb.set_trace()
         return results

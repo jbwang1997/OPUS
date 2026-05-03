@@ -6,21 +6,64 @@ import pickle
 import os.path as osp
 from tqdm import tqdm
 from mmdet.datasets import DATASETS
-from mmdet3d.datasets import NuScenesDataset
 from nuscenes.eval.common.utils import Quaternion
 from nuscenes.utils.geometry_utils import transform_matrix
 from torch.utils.data import DataLoader
 from models.utils import sparse2dense
-from .utils import compose_ego2img
-from .old_metrics import Metric_mIoU_Occupancy
+from .old_metrics import Metric_mIoU_Occ3D
+
+from mmdet.datasets.pipelines import Compose
+from .custom import CustomDataset
 
 
 @DATASETS.register_module()
-class NuScenesOccupancyDataset(NuScenesDataset):    
-    def __init__(self, *args, **kwargs):
-        super().__init__(filter_empty_gt=False, *args, **kwargs)
+class NuScenesOccupancyDataset(CustomDataset):    
+
+    def __init__(self,
+                 ann_file,
+                 pipeline=None,
+                 data_root=None,
+                 classes=None,
+                 load_interval=1,
+                 with_velocity=True,
+                 modality=None,
+                 filter_empty_gt=False,
+                 test_mode=False,
+                 use_valid_flag=False):
+        super().__init__()
+        self.ann_file = ann_file
+        self.data_root = data_root
+        self.load_interval = load_interval
+        self.with_velocity = with_velocity
+        self.filter_empty_gt = filter_empty_gt
+        self.test_mode = test_mode
+        self.use_valid_flag = use_valid_flag
+
+        if modality is None:
+            modality = dict(use_camera=False,
+                            use_lidar=True,
+                            use_radar=False,
+                            use_map=False,
+                            use_external=False)
+        self.modality = modality
+
+        self.CLASSES = self.get_classes(classes)
         self.data_infos = self.load_annotations(self.ann_file)
-    
+
+        # process pipeline
+        if pipeline is not None:
+            self.pipeline = Compose(pipeline)
+
+        # set group flag for the samplers
+        if not self.test_mode:
+            self._set_group_flag()
+
+    def load_annotations(self, ann_file):
+        data = mmcv.load(ann_file, file_format='pkl')
+        data_infos = list(sorted(data['infos'], key=lambda e: e['timestamp']))
+        data_infos = data_infos[::self.load_interval]
+        return data_infos
+
     def collect_cam_sweeps(self, index, into_past=75, into_future=75):
         scene_name = self.data_infos[index]['scene_name']
 
@@ -68,6 +111,24 @@ class NuScenesOccupancyDataset(NuScenesDataset):
             curr_index = curr_index + 1
 
         return all_sweeps_prev, all_sweeps_next
+
+    def get_ann_info(self, index):
+        info = self.data_infos[index]
+        # filter out bbox containing no points
+        if self.use_valid_flag:
+            mask = info['valid_flag']
+        else:
+            mask = info['num_lidar_pts'] > 0
+        gt_bboxes_3d = info['gt_boxes'][mask]
+        gt_names_3d = info['gt_names'][mask]
+
+        if self.with_velocity:
+            gt_velocity = info['gt_velocity'][mask]
+            nan_mask = np.isnan(gt_velocity[:, 0])
+            gt_velocity[nan_mask] = [0.0, 0.0]
+            gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1)
+
+        return dict(gt_bboxes_3d=gt_bboxes_3d, gt_names=gt_names_3d)
 
     def get_data_info(self, index):
         info = self.data_infos[index]

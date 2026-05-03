@@ -14,10 +14,9 @@ from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import EpochBasedRunner, build_optimizer, load_checkpoint
 from mmdet.apis import set_random_seed
 from mmdet.core import DistEvalHook, EvalHook
-from mmdet3d.datasets import build_dataset
-from mmdet3d.models import build_model
+from mmdet.datasets import build_dataset
+from mmdet.models import build_detector
 from loaders.builder import build_dataloader
-from models.core.hook.ema import MEGVIIEMAHook
 
 
 def main():
@@ -41,7 +40,6 @@ def main():
     from mmcv.utils.logging import logger_initialized
     logger_initialized['root'] = logging.Logger(__name__, logging.WARNING)
     logger_initialized['mmcv'] = logging.Logger(__name__, logging.WARNING)
-    logger_initialized['mmdet3d'] = logging.Logger(__name__, logging.WARNING)
 
     # you need GPUs
     assert torch.cuda.is_available()
@@ -115,7 +113,7 @@ def main():
     )
 
     logging.info('Creating model: %s' % cfgs.model.type)
-    model = build_model(cfgs.model)
+    model = build_detector(cfgs.model)
     model.init_weights()
 
     # logging.info(f'Model:\n{model}')

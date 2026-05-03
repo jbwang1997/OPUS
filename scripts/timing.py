@@ -14,8 +14,8 @@ from mmcv import Config, DictAction
 from mmcv.parallel import MMDataParallel
 from mmcv.runner import load_checkpoint
 from mmdet.apis import set_random_seed
-from mmdet3d.datasets import build_dataset, build_dataloader
-from mmdet3d.models import build_model
+from mmdet.datasets import build_dataset, build_dataloader
+from mmdet.models import build_model
 
 
 def init_logging(filename=None, debug=False):

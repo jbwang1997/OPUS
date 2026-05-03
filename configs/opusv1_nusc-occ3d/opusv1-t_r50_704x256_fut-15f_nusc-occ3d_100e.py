@@ -147,8 +147,7 @@ data = dict(
         classes=object_names,
         modality=input_modality,
         test_mode=False,
-        use_valid_flag=True,
-        box_type_3d='LiDAR'),
+        use_valid_flag=True),
     val=dict(
         type=dataset_type,
         data_root=dataset_root,
@@ -156,8 +155,7 @@ data = dict(
         pipeline=test_pipeline,
         classes=object_names,
         modality=input_modality,
-        test_mode=True,
-        box_type_3d='LiDAR'),
+        test_mode=True),
     test=dict(
         type=dataset_type,
         data_root=dataset_root,
@@ -165,8 +163,7 @@ data = dict(
         pipeline=test_pipeline,
         classes=object_names,
         modality=input_modality,
-        test_mode=True,
-        box_type_3d='LiDAR')
+        test_mode=True)
 )
 
 optimizer = dict(
@@ -194,7 +191,7 @@ lr_config = dict(
     min_lr_ratio=1e-3
 )
 total_epochs = 100
-batch_size = 1
+batch_size = 8
 
 # load pretrained weights
 load_from = 'pretrain/cascade_mask_rcnn_r50_fpn_coco-20e_20e_nuim_20201009_124951-40963960.pth'

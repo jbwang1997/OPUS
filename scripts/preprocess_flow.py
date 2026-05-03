@@ -66,13 +66,23 @@ def occ3d_loader(args, data):
 
     return index, coors, names, torch.eye(4, device=DEVICE, dtype=torch.float32)
 
-def occ3d_saver(args, data, index, flow):
+def occ3d_saver(args, data, index, prev_flow, prev_flags, next_flow, next_flags):
     scene_name, sample_token = data['scene_name'], data['token']
     save_root = args.save_root if args.save_root is not None \
         else osp.join(args.data_root, 'occ3d_flow')
     occ_file = osp.join(save_root, scene_name, sample_token, 'flow.npz')
     os.makedirs(osp.dirname(occ_file), exist_ok=True)
-    np.savez(occ_file, index=index, flow=flow, curr=args.n_his)
+
+    index = index.astype(np.uint8)
+    prev_flow = prev_flow.astype(np.float16)
+    prev_flags = prev_flags.astype(np.float16)
+    prev_flow = np.concatenate([prev_flow, prev_flags[..., None]], axis=-1)
+
+    next_flow = next_flow.astype(np.float16)
+    next_flags = next_flags.astype(np.float16)
+    next_flow = np.concatenate([next_flow, next_flags[..., None]], axis=-1)
+
+    np.savez(occ_file, index=index, prev_flow=prev_flow, next_flow=next_flow)
 
 
 def occupancy_loader(data_root):
@@ -84,9 +94,12 @@ def occupancy_saver():
 
 
 def quick_stop(args, data, saver):
-    index = np.zeros((0, 3), dtype=np.int64)
-    flow = np.zeros((0, args.n_his + args.n_fut + 1, 3), dtype=np.float32)
-    saver(args, data, index, flow)
+    index = np.zeros((0, 3))
+    prev_flow = np.zeros((0, args.n_prev, 3))
+    prev_flags = np.zeros((0, args.n_prev))
+    next_flow = np.zeros((0, args.n_next, 3))
+    next_flags = np.zeros((0, args.n_next))
+    saver(args, data, index, prev_flow, prev_flags, next_flow, next_flags)
 
 
 def collect_boxes(other, base):
@@ -95,7 +108,8 @@ def collect_boxes(other, base):
             gt_boxes=torch.zeros((0, 7), device=DEVICE, dtype=torch.float32),
             gt_names=np.zeros((0, ), dtype=np.dtype('<U20')),
             identity=np.zeros((0, ), dtype=np.dtype('<U32')),
-            mat=torch.eye(4, device=DEVICE, dtype=torch.float32)
+            mat=torch.eye(4, device=DEVICE, dtype=torch.float32),
+            padding=True
         )
     
     if other is not base:
@@ -126,18 +140,20 @@ def collect_boxes(other, base):
     gt_names = gt_names[dyn_mask]
     identity = identity[dyn_mask]
 
-    return dict(gt_boxes=gt_boxes, gt_names=gt_names, identity=identity, mat=other2base)
+    return dict(gt_boxes=gt_boxes, gt_names=gt_names, identity=identity, mat=other2base, padding=False)
 
 
 def transform_boxes(info, lidar2occ):
     if info['gt_boxes'].shape[0] == 0:
         return dict(gt_boxes=info['gt_boxes'],
                     gt_names=info['gt_names'],
-                    identity=info['identity'])
+                    identity=info['identity'],
+                    padding=info['padding'])
     
     gt_boxes = info['gt_boxes']
     gt_names = info['gt_names']
     identity = info['identity']
+    padding = info['padding']
     mat = lidar2occ @ info['mat']
 
     centers = torch.cat([gt_boxes[:, :3], torch.ones_like(gt_boxes[:, :1])], dim=-1)
@@ -153,7 +169,8 @@ def transform_boxes(info, lidar2occ):
 
     return dict(gt_boxes=gt_boxes,
                 gt_names=gt_names,
-                identity=identity)
+                identity=identity,
+                padding=padding)
 
 
 def cal_points_in_boxes(points, pt_names, info):
@@ -177,18 +194,33 @@ def cal_points_in_boxes(points, pt_names, info):
     return box_index
 
 
-def match_boxes(box_infos, curr_boxes, curr_ids):
+def match_boxes(box_infos, curr_boxes, curr_ids, valid_padding=False):
     prev_boxes_list = []
+    prev_flags_list = []
+    curr_flags = curr_boxes.new_ones(curr_boxes.shape[0]).bool()
     for box_info in box_infos:
+        boxes = box_info['gt_boxes']
+        identity = box_info['identity']
+        padding = box_info['padding']
+
         prev_boxes = curr_boxes.clone()
-        boxes, identity = box_info['gt_boxes'], box_info['identity']
+        prev_flags = curr_flags.clone()
         if boxes.shape[0] != 0:
             match = boxes.new_tensor(curr_ids[:, None] == identity[None, :])
             value, index = match.float().max(dim=1)
             prev_boxes[value == 1] = boxes[index[value == 1]]
+            prev_flags = value == 1
+        elif not (valid_padding and padding):
+            prev_flags = prev_boxes.new_zeros(prev_boxes.shape[0]).bool()
+
         prev_boxes_list.append(prev_boxes)
+        prev_flags_list.append(prev_flags)
         curr_boxes = prev_boxes
-    return prev_boxes_list
+        curr_flags = prev_flags
+    
+    prev_boxes = torch.stack(prev_boxes_list, dim=1)
+    prev_flags = torch.stack(prev_flags_list, dim=1)
+    return prev_boxes, prev_flags
 
 
 
@@ -199,9 +231,9 @@ if __name__ == '__main__':
     parser.add_argument('--occ_root', default='data/nuscenes/gts', type=str, help='Path to config file')
     parser.add_argument('--save_root', default=None, type=str, help='Path to config file')
     parser.add_argument('--ann_files', nargs='+', type=str,
-                        default=['nuscenes_infos_train_sweep2.pkl', 'nuscenes_infos_val_sweep2.pkl'])
-    parser.add_argument('--n_his', default=7, type=int, help='Path to config file')
-    parser.add_argument('--n_fut', default=6, type=int, help='Path to config file')
+                        default=['nuscenes_infos_train_sweep.pkl', 'nuscenes_infos_val_sweep.pkl'])
+    parser.add_argument('--n_prev', default=7, type=int, help='Path to config file')
+    parser.add_argument('--n_next', default=7, type=int, help='Path to config file')
     args = parser.parse_args()
 
     data = []
@@ -226,7 +258,7 @@ if __name__ == '__main__':
         nseq = len(values)
         for i in tqdm(range(len(values)), leave=False):
             infos = []
-            for j in range(-args.n_his, args.n_fut+1):
+            for j in range(-args.n_prev, args.n_next+1):
                 if i + j < 0 or i + j > nseq - 1:
                     infos.append(collect_boxes(None, values[i]))
                 else:
@@ -243,7 +275,7 @@ if __name__ == '__main__':
             lidar2occ = ego2occ @ lidar2ego
             box_infos = [transform_boxes(info, lidar2occ) for info in infos]
 
-            curr_info = box_infos[args.n_his]
+            curr_info = box_infos[args.n_prev]
             box_index = cal_points_in_boxes(coors, names, curr_info)
             index = index[box_index != -1]
             coors = coors[box_index != -1]
@@ -254,22 +286,32 @@ if __name__ == '__main__':
 
             pt_ids = curr_info['identity'][box_index.cpu().numpy()]
             pt_curr_boxes = curr_info['gt_boxes'][box_index] # (P, 7)
-            pt_prev_boxes_list = match_boxes(
-                box_infos[args.n_his-1::-1], pt_curr_boxes, pt_ids)[::-1]
-            pt_fut_boxes_list = match_boxes(
-                box_infos[args.n_his+1:], pt_curr_boxes, pt_ids)
-            pt_boxes = pt_prev_boxes_list + [pt_curr_boxes] + pt_fut_boxes_list
-            pt_boxes = torch.stack(pt_boxes, dim=1) # (P, T, 7)
+            pt_prev_boxes, pt_prev_flags = match_boxes(
+                box_infos[args.n_prev-1::-1], pt_curr_boxes, pt_ids, valid_padding=True)
+            pt_next_boxes, pt_next_flags = match_boxes(
+                box_infos[args.n_prev+1:], pt_curr_boxes, pt_ids)
 
             offset = coors - pt_curr_boxes[:, :3]
             Cos, Sin = torch.cos(pt_curr_boxes[:, 6]), torch.sin(pt_curr_boxes[:, 6])
             mat = torch.stack([Cos, Sin, -Sin, Cos], dim=-1).reshape(-1, 2, 2)
             offset[:, :2] = torch.matmul(mat, offset[:, :2, None]).squeeze(-1)
 
-            offset = offset[:, None, :].expand(-1, pt_boxes.shape[1], -1).clone()
-            Cos, Sin = torch.cos(pt_boxes[:, :, 6]), torch.sin(pt_boxes[:, :, 6])
-            mat = torch.stack([Cos, -Sin, Sin, Cos], dim=-1).reshape(-1, pt_boxes.shape[1], 2, 2)
-            offset[..., :2] = torch.matmul(mat, offset[..., :2, None]).squeeze(-1)
-            flow = pt_boxes[:, :, :3] + offset - coors[:, None, :]
+            prev_offset = offset[:, None, :].expand(-1, pt_prev_boxes.shape[1], -1).clone()
+            Cos, Sin = torch.cos(pt_prev_boxes[:, :, 6]), torch.sin(pt_prev_boxes[:, :, 6])
+            mat = torch.stack([Cos, -Sin, Sin, Cos], dim=-1).reshape(-1, pt_prev_boxes.shape[1], 2, 2)
+            prev_offset[..., :2] = torch.matmul(mat, prev_offset[..., :2, None]).squeeze(-1)
+            prev_flow = pt_prev_boxes[:, :, :3] + prev_offset - coors[:, None, :]
 
-            saver(args, values[i], index.cpu().numpy(), flow.cpu().numpy())
+            next_offset = offset[:, None, :].expand(-1, pt_next_boxes.shape[1], -1).clone()
+            Cos, Sin = torch.cos(pt_next_boxes[:, :, 6]), torch.sin(pt_next_boxes[:, :, 6])
+            mat = torch.stack([Cos, -Sin, Sin, Cos], dim=-1).reshape(-1, pt_next_boxes.shape[1], 2, 2)
+            next_offset[..., :2] = torch.matmul(mat, next_offset[..., :2, None]).squeeze(-1)
+            next_flow = pt_next_boxes[:, :, :3] + next_offset - coors[:, None, :]
+
+            saver(args,
+                  values[i],
+                  index.cpu().numpy(),
+                  prev_flow.cpu().numpy(),
+                  pt_prev_flags.cpu().numpy(),
+                  next_flow.cpu().numpy(),
+                  pt_next_flags.cpu().numpy())

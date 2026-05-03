@@ -367,7 +367,7 @@ class OPUSV2Head(BaseModule):
         return loss_dict
     
 
-    def get_occ(self, pred_dicts, img_metas, rescale=False):
+    def get_occ(self, pred_dicts, img_metas):
         voxels = pred_dicts['all_voxel_coors'][-1]
         cls_scores = pred_dicts['all_cls_scores'][-1].sigmoid()
         batch_size = voxels[-1, 0].item() + 1

@@ -11,8 +11,8 @@ from mmcv import Config
 from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
 from mmcv.runner import load_checkpoint
 from mmdet.apis import set_random_seed, multi_gpu_test, single_gpu_test
-from mmdet3d.datasets import build_dataset, build_dataloader
-from mmdet3d.models import build_model
+from mmdet.datasets import build_dataset, build_dataloader
+from mmdet.models.builder import build_detector
 from models.utils import VERSION
 
 
@@ -111,7 +111,7 @@ def main():
     )
 
     logging.info('Creating model: %s' % cfgs.model.type)
-    model = build_model(cfgs.model)
+    model = build_detector(cfgs.model)
     model.cuda()
     model.fp16_enabled = True
 

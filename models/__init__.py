@@ -1,7 +1,6 @@
-from .backbones import __all__
+from .img_modules import *
+from .lidar_modules import *
 from .bbox import __all__
-from .lidar_encoder import __all__
-from .neck import __all__
 
 from .opusv1.opus import OPUSV1
 from .opusv1.opus_head import OPUSV1Head
